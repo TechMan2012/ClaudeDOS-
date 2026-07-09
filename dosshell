@@ -1,0 +1,323 @@
+#!/bin/sh
+# ClaudeDOS - "DOS Shell" bare-bones menu system
+
+ESC="$(printf '\033')"
+CLR="${ESC}[2J${ESC}[H"
+BG="${ESC}[44m"
+FG="${ESC}[37m"
+YEL="${ESC}[1;33m"
+WHT="${ESC}[1;37m"
+RST="${ESC}[0m"
+SAVE="${ESC}7"
+REST="${ESC}8"
+
+BW=75
+DASHES=$(printf '%*s' "$BW" '' | tr ' ' '-')
+SEP="-------------------------------------------------------------------------------"
+
+box_line() {
+    printf "  |%-*s|\n" "$BW" " $1"
+}
+
+update_clock() {
+    now=$(date +"%H:%M")
+    printf "%s%s[1;72H%s%s%s%s" "$SAVE" "$ESC" "$YEL" "$now" "$FG" "$REST"
+}
+
+draw_frame() {
+    printf "%s%s%s" "$CLR" "$BG" "$FG"
+    printf "%s\n" "${YEL} File   Options   View   Tree   Help                                          ${FG}"
+    printf "%s\n" "$SEP"
+    printf "\n"
+    printf "%s\n" "                       ${WHT}MS-DOS Shell -- ClaudeDOS${FG}"
+    printf "\n"
+    printf "  +%s+\n" "$DASHES"
+    box_line ""
+    box_line "    [1]  Command Prompt"
+    box_line "    [2]  Useful Tools"
+    box_line "    [3]  Misc"
+    box_line "    [4]  Shut Down"
+    box_line ""
+    printf "  +%s+\n" "$DASHES"
+    printf "\n"
+    printf "%s" "  ${YEL}Type a number and press ENTER: ${WHT}"
+    update_clock
+}
+
+# ---------------- FILE MANAGER ----------------
+file_manager() {
+    dir="/root"
+    while true; do
+        printf "%s%s%s" "$CLR" "$BG" "$FG"
+        printf "%s\n" "${YEL} File Manager -- ${dir}${FG}"
+        printf "%s\n" "$SEP"
+        ls -la "$dir" 2>/dev/null
+        printf "\n"
+        printf "%s" "${YEL}Type a directory name to enter, '..' to go up, or 'menu' to return: ${WHT}"
+        read choice
+        case "$choice" in
+            menu) return ;;
+            ..) dir=$(dirname "$dir") ;;
+            "") ;;
+            *)
+                if [ -d "$dir/$choice" ]; then
+                    dir="$dir/$choice"
+                else
+                    printf "\n${YEL}No such directory.${RST}\n"
+                    sleep 1
+                fi
+                ;;
+        esac
+    done
+}
+
+# ---------------- FREE-TYPING TEXT EDITOR ----------------
+text_editor() {
+    file="/root/scratch.txt"
+    [ -f "$file" ] || : > "$file"
+
+    printf "%s%s%s" "$CLR" "$BG" "$FG"
+    printf "%s\n" "${YEL} Text Editor -- ${file}${FG}"
+    printf "%s\n" "$SEP"
+    printf "%s\n" "${YEL}Just type. Ctrl+S = Save   Ctrl+X = Exit${FG}"
+    printf "%s\n" "$SEP"
+    printf "\n"
+
+    buf=""
+    if [ -s "$file" ]; then
+        buf=$(cat "$file")
+        printf "%s" "$buf"
+    fi
+
+    ENTER=$(printf '\r')
+    BACKSPACE=$(printf '\177')
+    CTRLS=$(printf '\023')
+    CTRLX=$(printf '\030')
+
+    stty raw -echo
+    while true; do
+        c=$(dd bs=1 count=1 2>/dev/null)
+        case "$c" in
+            "$ENTER")
+                buf="${buf}
+"
+                printf '\r\n'
+                ;;
+            "$BACKSPACE")
+                if [ -n "$buf" ]; then
+                    buf="${buf%?}"
+                    printf '\b \b'
+                fi
+                ;;
+            "$CTRLS")
+                printf "%s" "$buf" > "$file"
+                stty sane
+                printf "\r\n${YEL}[Saved]${RST}\r\n"
+                stty raw -echo
+                ;;
+            "$CTRLX")
+                stty sane
+                return
+                ;;
+            "") ;;
+            *)
+                buf="${buf}${c}"
+                printf "%s" "$c"
+                ;;
+        esac
+    done
+}
+
+# ---------------- COMMAND PROMPT ----------------
+command_prompt() {
+    printf "%s%s%s" "$CLR" "$RST" ""
+    printf "Command Prompt -- type 'exit' to return to the menu\n\n"
+    HOME=/root sh
+}
+
+# ---------------- SYSTEM INFO ----------------
+system_info() {
+    printf "%s%s%s" "$CLR" "$BG" "$FG"
+    printf "%s\n" "${YEL} System Info${FG}"
+    printf "%s\n" "$SEP"
+    printf "\n"
+    printf "Kernel:  %s\n" "$(uname -srmo)"
+    printf "\n"
+    printf "Memory:\n"
+    free
+    printf "\n"
+    printf "Disk:\n"
+    df -h
+    printf "\n"
+    printf "%s" "${YEL}Press ENTER to return: ${WHT}"
+    read _
+}
+
+# ---------------- CALCULATOR ----------------
+calculator() {
+    printf "%s%s%s" "$CLR" "$BG" "$FG"
+    printf "%s\n" "${YEL} Calculator${FG}"
+    printf "%s\n" "$SEP"
+    printf "\n"
+    printf "%s" "First number: "
+    read a
+    printf "%s" "Operator (+ - x /): "
+    read op
+    printf "%s" "Second number: "
+    read b
+    case "$op" in
+        +) r=$((a + b)) ;;
+        -) r=$((a - b)) ;;
+        x|\*) r=$((a * b)) ;;
+        /) r=$((a / b)) ;;
+        *) r="?" ;;
+    esac
+    printf "\nResult: %s %s %s = %s\n" "$a" "$op" "$b" "$r"
+    printf "\n%s" "${YEL}Press ENTER to return: ${WHT}"
+    read _
+}
+
+# ---------------- ABOUT ----------------
+about() {
+    kernel=$(uname -r)
+    arch=$(uname -m)
+    host=$(hostname 2>/dev/null)
+    [ -z "$host" ] && host="custom-linux"
+
+    uptime_secs=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    if [ -n "$uptime_secs" ]; then
+        up_h=$((uptime_secs / 3600))
+        up_m=$(((uptime_secs % 3600) / 60))
+        uptime_str="${up_h}h ${up_m}m"
+    else
+        uptime_str="unknown"
+    fi
+
+    cpu=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//')
+    [ -z "$cpu" ] && cpu=$(grep -m1 "Hardware" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//')
+    [ -z "$cpu" ] && cpu="unknown"
+
+    cores=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null)
+
+    mem_total_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB')
+    mem_avail_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB')
+    if [ -n "$mem_total_kb" ] && [ -n "$mem_avail_kb" ]; then
+        mem_used_mb=$(( (mem_total_kb - mem_avail_kb) / 1024 ))
+        mem_total_mb=$(( mem_total_kb / 1024 ))
+        mem_str="${mem_used_mb}MiB / ${mem_total_mb}MiB"
+    else
+        mem_str="unknown"
+    fi
+
+    printf "%s%s%s\n" "$CLR" "$BG" "$FG"
+
+    L01="   .--------------.   "
+    L02="  /|              |\\  "
+    L03=" / |  ___________ | \\ "
+    L04="/  | |...........| |  \\"
+    L05="|  | |...........| |  |"
+    L06="|  | |___________| |  |"
+    L07="|__|_______________|__|"
+    L08="   |_______________|   "
+    L09="    \\_____________/    "
+    L10="                        "
+
+    I01="${YEL}root${FG}@${YEL}${host}${FG}"
+    I02="--------------------"
+    I03="${WHT}OS${FG}:      ClaudeDOS (DOS Shell Edition)"
+    I04="${WHT}Kernel${FG}:  ${kernel} (${arch})"
+    I05="${WHT}Uptime${FG}:  ${uptime_str}"
+    I06="${WHT}Shell${FG}:   busybox ash"
+    I07="${WHT}Init${FG}:    custom /init (no systemd)"
+    I08="${WHT}CPU${FG}:     ${cpu} (${cores} core[s])"
+    I09="${WHT}Memory${FG}:  ${mem_str}"
+    I10=""
+
+    printf "\n"
+    printf "  ${YEL}%s${FG}  %b\n" "$L01" "$I01"
+    printf "  ${YEL}%s${FG}  %b\n" "$L02" "$I02"
+    printf "  ${YEL}%s${FG}  %b\n" "$L03" "$I03"
+    printf "  ${YEL}%s${FG}  %b\n" "$L04" "$I04"
+    printf "  ${YEL}%s${FG}  %b\n" "$L05" "$I05"
+    printf "  ${YEL}%s${FG}  %b\n" "$L06" "$I06"
+    printf "  ${YEL}%s${FG}  %b\n" "$L07" "$I07"
+    printf "  ${YEL}%s${FG}  %b\n" "$L08" "$I08"
+    printf "  ${YEL}%s${FG}  %b\n" "$L09" "$I09"
+    printf "  ${YEL}%s${FG}  %b\n" "$L10" "$I10"
+    printf "\n"
+    printf "%s" "  ${YEL}Press ENTER to return: ${WHT}"
+    read _
+}
+
+# ---------------- SUBMENUS ----------------
+useful_tools_menu() {
+    while true; do
+        printf "%s%s%s" "$CLR" "$BG" "$FG"
+        printf "%s\n" "${YEL} Useful Tools${FG}"
+        printf "%s\n" "$SEP"
+        printf "\n"
+        printf "  +%s+\n" "$DASHES"
+        box_line ""
+        box_line "    [1]  System Info"
+        box_line "    [2]  Calculator"
+        box_line "    [3]  About"
+        box_line "    [0]  Back"
+        box_line ""
+        printf "  +%s+\n" "$DASHES"
+        printf "\n"
+        printf "%s" "  ${YEL}Type a number and press ENTER: ${WHT}"
+        read c
+        case "$c" in
+            1) system_info ;;
+            2) calculator ;;
+            3) about ;;
+            0) return ;;
+            *) ;;
+        esac
+    done
+}
+
+misc_menu() {
+    while true; do
+        printf "%s%s%s" "$CLR" "$BG" "$FG"
+        printf "%s\n" "${YEL} Misc${FG}"
+        printf "%s\n" "$SEP"
+        printf "\n"
+        printf "  +%s+\n" "$DASHES"
+        box_line ""
+        box_line "    [1]  File Manager"
+        box_line "    [2]  Text Editor"
+        box_line "    [0]  Back"
+        box_line ""
+        printf "  +%s+\n" "$DASHES"
+        printf "\n"
+        printf "%s" "  ${YEL}Type a number and press ENTER: ${WHT}"
+        read c
+        case "$c" in
+            1) file_manager ;;
+            2) text_editor ;;
+            0) return ;;
+            *) ;;
+        esac
+    done
+}
+
+# ---------------- TOP LEVEL ----------------
+mkdir -p /root
+
+draw_frame
+while true; do
+    read choice
+    case "$choice" in
+        1) command_prompt ;;
+        2) useful_tools_menu ;;
+        3) misc_menu ;;
+        4)
+            printf "%s%sShutting down...%s\n" "$CLR" "$RST" ""
+            sleep 1
+            poweroff -f
+            ;;
+        *) ;;
+    esac
+    draw_frame
+done

@@ -1,0 +1,36 @@
+#!/bin/busybox sh
+# This is PID 1 - boots straight into the retro DOS Shell menu
+
+/bin/busybox mount -t proc none /proc
+/bin/busybox mount -t sysfs none /sys
+/bin/busybox mount -t devtmpfs none /dev 2>/dev/null || /bin/busybox mount -t tmpfs none /dev
+
+# Load keyboard drivers (USB HID) - host controllers are built into the kernel.
+# hid.ko = core HID protocol, usbhid.ko = USB transport, hid-generic.ko = the
+# actual driver that binds a HID device to usable keyboard input
+/bin/busybox insmod /lib/modules/hid.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/usbhid.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/hid-generic.ko 2>/dev/null
+/bin/busybox sleep 1
+
+/bin/busybox clear
+
+# ANSI art boot banner
+printf "\033[1;36m"
+cat << 'BANNER'
+
+  ____ _        _   _   _ ____  _____ ____   ___  ____
+ / ___| |      / \ | | | |  _ \| ____|  _ \ / _ \/ ___|
+| |   | |     / _ \| | | | | | |  _| | | | | | | \___ \
+| |___| |___ / ___ \ |_| | |_| | |___| |_| | |_| |___) |
+ \____|_____/_/   \_\___/|____/|_____|____/ \___/|____/
+
+                    D O S   S H E L L
+
+BANNER
+printf "\033[0m"
+printf "\n  Kernel: %s\n" "$(uname -r)"
+printf "  Booting into DOS Shell interface...\n\n"
+/bin/busybox sleep 2
+
+exec /bin/busybox setsid /bin/busybox cttyhack /bin/dosshell
