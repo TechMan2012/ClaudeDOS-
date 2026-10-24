@@ -51,8 +51,9 @@ anything interactive. Start menu = `Ctrl+N` or click **Start**.
 | taskbar entry / **Start** | switch window / open menu |
 | Files: click, click again | select, open |
 
-PS/2 pointing devices (trackpoint, touchpad) and USB mice work. Serial
-digitizers (the X220 Tablet's pen/touchscreen) are not supported.
+PS/2 pointing devices (trackpoint, touchpad) and USB mice work. USB/HID pens and touchscreens (e.g. the X220 Tablet's Wacom digitizer) are read
+directly from evdev and scaled to the full screen; serial-attached digitizers
+are untested.
 
 ## Architecture
 

@@ -24,7 +24,10 @@
  * SIGUSR1 = pause (restore tty, erase pointer, stop); SIGCONT = resume.
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
+#include <linux/input.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -273,10 +276,44 @@ static int accel(int d)
     return d < 0 ? -a : a;
 }
 
+/* Position (mx,my) is already updated; handle shape, buttons, wheel. */
+static void pointer_input(int b, int rb, int dz)
+{
+    int ncol, nrow, moved;
+    ncol = mx / CELL_W;
+    nrow = my / CELL_H;
+    moved = (ncol != mcol || nrow != mrow);
+    mcol = ncol; mrow = nrow;
+    mactive = 1;
+    if (moved) { pointer_erase(); pointer_show(mcol, mrow); }
+
+    if (dz) emit("w%d %d %d\n", mcol + 1, mrow + 1, dz > 0 ? 1 : -1);
+
+    if (b && !mbtn) {
+        long now = now_ms();
+        pending_drag = 0;
+        emit("d%d %d 1\n", mcol + 1, mrow + 1);
+        if (click_col == mcol && click_row == mrow && now - last_click < DBLMS) {
+            emit("x%d %d 1\n", mcol + 1, mrow + 1);
+            click_col = -1;                 /* no triple-click chains */
+        } else {
+            click_col = mcol; click_row = mrow; last_click = now;
+        }
+    } else if (!b && mbtn) {
+        if (pending_drag) { emit("g%d %d 1\n", mcol + 1, mrow + 1); pending_drag = 0; }
+        emit("u%d %d 1\n", mcol + 1, mrow + 1);
+    } else if (b && moved) {
+        pending_drag = 1;
+    }
+    if (rb && !mrbtn) emit("r%d %d 1\n", mcol + 1, mrow + 1);
+    mbtn = b;
+    mrbtn = rb;
+}
+
 static void mouse_packets(void)
 {
     while (mlen >= plen) {
-        int dx, dy, dz = 0, b, rb, ncol, nrow, moved;
+        int dx, dy, dz = 0, b, rb;
         if (!(mbuf[0] & 8)) {            /* out of sync: drop a byte */
             memmove(mbuf, mbuf + 1, --mlen);
             continue;
@@ -294,34 +331,7 @@ static void mouse_packets(void)
         if (my < 0) my = 0;
         if (mx > cols * CELL_W - 1) mx = cols * CELL_W - 1;
         if (my > rows * CELL_H - 1) my = rows * CELL_H - 1;
-        ncol = mx / CELL_W;
-        nrow = my / CELL_H;
-        moved = (ncol != mcol || nrow != mrow);
-        mcol = ncol; mrow = nrow;
-        mactive = 1;
-        if (moved) { pointer_erase(); pointer_show(mcol, mrow); }
-
-        if (dz) emit("w%d %d %d\n", mcol + 1, mrow + 1, dz > 0 ? 1 : -1);
-
-        if (b && !mbtn) {
-            long now = now_ms();
-            pending_drag = 0;
-            emit("d%d %d 1\n", mcol + 1, mrow + 1);
-            if (click_col == mcol && click_row == mrow && now - last_click < DBLMS) {
-                emit("x%d %d 1\n", mcol + 1, mrow + 1);
-                click_col = -1;                 /* no triple-click chains */
-            } else {
-                click_col = mcol; click_row = mrow; last_click = now;
-            }
-        } else if (!b && mbtn) {
-            if (pending_drag) { emit("g%d %d 1\n", mcol + 1, mrow + 1); pending_drag = 0; }
-            emit("u%d %d 1\n", mcol + 1, mrow + 1);
-        } else if (b && moved) {
-            pending_drag = 1;
-        }
-        if (rb && !mrbtn) emit("r%d %d 1\n", mcol + 1, mrow + 1);
-        mbtn = b;
-        mrbtn = rb;
+        pointer_input(b, rb, dz);
     }
 }
 
@@ -346,14 +356,95 @@ static void mouse_open(void)
     }
 }
 
+/* ---------------- absolute digitizers (pen / touchscreen) ----------------
+ * /dev/input/mice squashes absolute devices into a tiny virtual screen, which
+ * is why a Wacom pen only reached "halfway". Read them straight from evdev and
+ * scale the real axis range onto the text grid. Grabbed so mousedev ignores them. */
+#define MAXTAB 4
+struct tab { int idx, fd, ax, ay, minx, maxx, miny, maxy, x, y, touch, stylus, seen; };
+static struct tab tabs[MAXTAB];
+static int ntab;
+
+#define TBIT(a, n) ((a)[(n) / 8] & (1 << ((n) % 8)))
+
+static void tablet_scan(void)
+{
+    char path[32];
+    int i;
+    for (i = 0; i < 32; i++) {
+        if (ntab >= MAXTAB) { int f = 0, q; for (q = 0; q < ntab; q++) if (tabs[q].fd < 0) f = 1; if (!f) break; }
+        uint8_t ev[(EV_MAX + 8) / 8 + 1] = {0}, ab[(ABS_MAX + 8) / 8 + 1] = {0};
+        uint8_t pr[(INPUT_PROP_MAX + 8) / 8 + 1] = {0}, kb[(KEY_MAX + 8) / 8 + 1] = {0};
+        struct input_absinfo ix, iy;
+        struct tab *t;
+        int fd, ax = ABS_X, ay = ABS_Y, direct, j, dup = 0;
+
+        for (j = 0; j < ntab; j++) if (tabs[j].fd >= 0 && tabs[j].idx == i) dup = 1;
+        if (dup) continue;
+        snprintf(path, sizeof path, "/dev/input/event%d", i);
+        fd = open(path, O_RDWR | O_NONBLOCK);
+        if (fd < 0) continue;
+        ioctl(fd, EVIOCGBIT(0, sizeof ev), ev);
+        if (!TBIT(ev, EV_ABS) || !TBIT(ev, EV_KEY)) { close(fd); continue; }
+        ioctl(fd, EVIOCGBIT(EV_ABS, sizeof ab), ab);
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof kb), kb);
+        ioctl(fd, EVIOCGPROP(sizeof pr), pr);
+        if (!TBIT(ab, ABS_X) || !TBIT(ab, ABS_Y)) {
+            ax = ABS_MT_POSITION_X; ay = ABS_MT_POSITION_Y;
+            if (!TBIT(ab, ax) || !TBIT(ab, ay)) { close(fd); continue; }
+        }
+        /* pens/touchscreens only: not touchpads (those are INPUT_PROP_POINTER) */
+        direct = TBIT(pr, INPUT_PROP_DIRECT) || TBIT(kb, BTN_TOOL_PEN) ||
+                 ((TBIT(kb, BTN_TOUCH) || TBIT(kb, BTN_LEFT)) && !TBIT(kb, BTN_TOOL_FINGER));
+        if (!direct || ioctl(fd, EVIOCGABS(ax), &ix) < 0 || ioctl(fd, EVIOCGABS(ay), &iy) < 0 ||
+            ix.maximum <= ix.minimum || iy.maximum <= iy.minimum) { close(fd); continue; }
+        ioctl(fd, EVIOCGRAB, 1);
+        for (j = 0; j < ntab && tabs[j].fd >= 0; j++) ;
+        t = &tabs[j];
+        if (j == ntab) ntab++;
+        memset(t, 0, sizeof *t);
+        t->idx = i; t->fd = fd; t->ax = ax; t->ay = ay;
+        t->minx = ix.minimum; t->maxx = ix.maximum;
+        t->miny = iy.minimum; t->maxy = iy.maximum;
+    }
+}
+
+static void tablet_events(struct tab *t)
+{
+    struct input_event e[16];
+    ssize_t r;
+    while ((r = read(t->fd, e, sizeof e)) > 0) {
+        int k, n = (int)(r / sizeof e[0]);
+        for (k = 0; k < n; k++) {
+            if (e[k].type == EV_ABS) {
+                if (e[k].code == t->ax) { t->x = e[k].value; t->seen = 1; }
+                else if (e[k].code == t->ay) { t->y = e[k].value; t->seen = 1; }
+            } else if (e[k].type == EV_KEY) {
+                if (e[k].code == BTN_TOUCH || e[k].code == BTN_LEFT) t->touch = e[k].value != 0;
+                else if (e[k].code == BTN_STYLUS || e[k].code == BTN_RIGHT) t->stylus = e[k].value != 0;
+            } else if (e[k].type == EV_SYN && e[k].code == SYN_REPORT && t->seen) {
+                long vx = t->x - t->minx, vy = t->y - t->miny;
+                if (vx < 0) vx = 0;
+                if (vy < 0) vy = 0;
+                mx = (int)(vx * (cols * CELL_W - 1) / (t->maxx - t->minx));
+                my = (int)(vy * (rows * CELL_H - 1) / (t->maxy - t->miny));
+                if (mx > cols * CELL_W - 1) mx = cols * CELL_W - 1;
+                if (my > rows * CELL_H - 1) my = rows * CELL_H - 1;
+                pointer_input(t->touch, t->stylus, 0);
+            }
+        }
+    }
+    if (r == 0 || (r < 0 && errno != EAGAIN && errno != EINTR)) { close(t->fd); t->fd = -1; }
+}
+
 /* ---------------- signals ---------------- */
 static void on_usr1(int s) { (void)s; want_pause = 1; }
 static void on_term(int s) { (void)s; want_quit = 1; }
 
 int main(void)
 {
-    struct pollfd fds[3];
-    long t_tick, t_ptr, t_mopen;
+    struct pollfd fds[3 + MAXTAB];
+    long t_tick, t_ptr, t_mopen, t_scan;
     uint8_t hdr[4];
     FILE *pf;
 
@@ -370,6 +461,7 @@ int main(void)
         cols = hdr[1];
     }
     mouse_open();
+    tablet_scan();
     mx = cols * CELL_W / 2;
     my = rows * CELL_H / 2;
     mcol = mx / CELL_W;
@@ -379,11 +471,11 @@ int main(void)
     if (pf) { fprintf(pf, "%d\n", (int)getpid()); fclose(pf); }
 
     tty_raw();
-    t_tick = t_ptr = t_mopen = now_ms();
+    t_tick = t_ptr = t_mopen = t_scan = now_ms();
 
     while (!want_quit) {
         long now;
-        int n, nf = 0, mi = -1;
+        int n, nf = 0, mi = -1, ti, k;
 
         if (want_pause) {
             pointer_erase();
@@ -392,12 +484,17 @@ int main(void)
             kill(getpid(), SIGSTOP);      /* parked until SIGCONT */
             tty_raw();
             tcflush(tty, TCIFLUSH);
+            { struct input_event junk[16]; for (k = 0; k < ntab; k++) if (tabs[k].fd >= 0) { while (read(tabs[k].fd, junk, sizeof junk) > 0) ; tabs[k].touch = tabs[k].stylus = 0; } }
             mlen = 0; klen = kpos = 0;
             pdrawn = 0;
         }
 
         fds[nf].fd = tty; fds[nf].events = POLLIN; fds[nf].revents = 0; nf++;
         if (mfd >= 0) { mi = nf; fds[nf].fd = mfd; fds[nf].events = POLLIN; fds[nf].revents = 0; nf++; }
+        ti = nf;
+        for (k = 0; k < ntab; k++) {
+            fds[nf].fd = tabs[k].fd; fds[nf].events = POLLIN; fds[nf].revents = 0; nf++;
+        }
         fds[nf].fd = 1; fds[nf].events = 0; fds[nf].revents = 0; nf++;
 
         n = poll(fds, nf, 40);
@@ -415,6 +512,9 @@ int main(void)
                     close(mfd); mfd = -1;
                 }
             }
+            for (k = 0; k < ntab; k++)
+                if (fds[ti + k].fd >= 0 && (fds[ti + k].revents & (POLLIN | POLLERR | POLLHUP)))
+                    tablet_events(&tabs[k]);
             if (fds[nf - 1].revents & (POLLERR | POLLHUP)) break;  /* reader gone */
         }
 
@@ -427,6 +527,7 @@ int main(void)
         if (now - t_tick >= 1000) { emit("t\n"); t_tick = now; }
         if (mactive && now - t_ptr >= 100) { pointer_refresh(mcol, mrow); t_ptr = now; }
         if (mfd < 0 && now - t_mopen >= 2000) { mouse_open(); t_mopen = now; }
+        if (now - t_scan >= 3000) { tablet_scan(); t_scan = now; }
     }
 
     pointer_erase();
