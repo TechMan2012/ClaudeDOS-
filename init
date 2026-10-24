@@ -11,7 +11,20 @@
 /bin/busybox insmod /lib/modules/hid.ko 2>/dev/null
 /bin/busybox insmod /lib/modules/usbhid.ko 2>/dev/null
 /bin/busybox insmod /lib/modules/hid-generic.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/libahci.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/ahci.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/usb-storage.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/nvme-auth.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/nvme-core.ko 2>/dev/null
+/bin/busybox insmod /lib/modules/nvme.ko 2>/dev/null
+# PS/2 mouse / trackpoint / touchpad (USB mice use usbhid above; mousedev is built in)
+/bin/busybox insmod /lib/modules/psmouse.ko 2>/dev/null
+[ -e /dev/input/mice ] || { /bin/busybox mkdir -p /dev/input; /bin/busybox mknod /dev/input/mice c 13 63 2>/dev/null; }
+[ -e /dev/vcsa ] || /bin/busybox mknod /dev/vcsa c 7 128 2>/dev/null
 /bin/busybox sleep 1
+
+# keep late kernel messages from scribbling over the desktop
+echo '1 1 1 1' > /proc/sys/kernel/printk 2>/dev/null
 
 /bin/busybox clear
 
@@ -25,12 +38,12 @@ cat << 'BANNER'
 | |___| |___ / ___ \ |_| | |_| | |___| |_| | |_| |___) |
  \____|_____/_/   \_\___/|____/|_____|____/ \___/|____/
 
-                    D O S   S H E L L
+                    D E S K T O P
 
 BANNER
 printf "\033[0m"
 printf "\n  Kernel: %s\n" "$(uname -r)"
-printf "  Booting into DOS Shell interface...\n\n"
+printf "  Starting the desktop...\n\n"
 /bin/busybox sleep 2
 
-exec /bin/busybox setsid /bin/busybox cttyhack /bin/dosshell
+exec /bin/busybox setsid /bin/busybox cttyhack /bin/desktop

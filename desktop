@@ -1,0 +1,7 @@
+#!/bin/sh
+# Starts the input helper (keyboard + mouse) feeding the desktop.
+# If the desktop ever exits, start it again so the machine never dead-ends.
+while :; do
+    /bin/kbmouse | /bin/dosshell
+    sleep 1
+done

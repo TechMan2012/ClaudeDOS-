@@ -1,323 +1,779 @@
 #!/bin/sh
-# ClaudeDOS - "DOS Shell" bare-bones menu system
+# ClaudeDOS Desktop -- a windowed text-mode desktop written in plain sh.
+# Every app lives in its own window. Windows overlap, have focus, and can be
+# moved, resized, maximized and closed from the keyboard.
 
-ESC="$(printf '\033')"
-CLR="${ESC}[2J${ESC}[H"
-BG="${ESC}[44m"
-FG="${ESC}[37m"
-YEL="${ESC}[1;33m"
-WHT="${ESC}[1;37m"
+ESC=$(printf '\033')
+NL='
+'
+TAB=$(printf '\t')
+K_ENTER=$(printf '\r')
+K_BS=$(printf '\177')
+K_BS2=$(printf '\010')
+K_CS=$(printf '\023')   # Ctrl+S
+K_CX=$(printf '\030')   # Ctrl+X
+K_CW=$(printf '\027')   # Ctrl+W
+K_CN=$(printf '\016')   # Ctrl+N
+
+# ---- colours ----
 RST="${ESC}[0m"
-SAVE="${ESC}7"
-REST="${ESC}8"
+DESKA="${ESC}[0;37;46m"
+BODY="${ESC}[0;30;47m"
+TON="${ESC}[1;37;44m"
+TOFF="${ESC}[0;37;40m"
+SELA="${ESC}[1;37;44m"
+STAT="${ESC}[0;30;46m"
+SHAD="${ESC}[0;30;40m"
+BARA="${ESC}[0;30;47m"
+TOPA="${ESC}[1;37;44m"
+WMA="${ESC}[1;37;41m"
+TERMA="${ESC}[0;37;40m"
+TXA="$BODY"
 
-BW=75
-DASHES=$(printf '%*s' "$BW" '' | tr ' ' '-')
-SEP="-------------------------------------------------------------------------------"
+DASHES=""
+i=0
+while [ $i -lt 30 ]; do DASHES="${DASHES}----------"; i=$((i+1)); done
 
-box_line() {
-    printf "  |%-*s|\n" "$BW" " $1"
+# ---- screen size (falls back to 80x25) ----
+set -- $(stty -F /dev/tty size 2>/dev/null)
+ROWS=${1:-25}
+COLS=${2:-80}
+[ "$ROWS" -lt 25 ] 2>/dev/null && ROWS=25
+[ "$COLS" -lt 80 ] 2>/dev/null && COLS=80
+[ "$COLS" -gt 200 ] && COLS=200
+
+NEXT=1
+ORDER=""
+FOCUS=""
+MODE=app
+NOW=""
+NEWID=""
+ACT=""
+
+# ---- window "records": W_<id>_<field> ----
+g() { eval "$3=\${W_$1_$2}"; }
+s() { eval "W_$1_$2=\$3"; }
+geom() { g $1 x X; g $1 y Y; g $1 w W; g $1 h H; }
+cgeom() { geom $1; CX=$((X+1)); CY=$((Y+1)); CW=$((W-2)); CH=$((H-2)); }
+crow() { printf '\033[%d;%dH%s%-*.*s' $((CY+$1)) $CX "$3" $CW $CW "$2"; }
+paint() { "$@" > /tmp/.frame; cat /tmp/.frame; }
+
+# ---------------------------------------------------------------
+#  text helpers
+# ---------------------------------------------------------------
+# emit_text <text> <maxrows> <tail 0/1> <cursor 0/1>
+emit_text() {
+    local t="$1" max=$2 tl=$3 cur=$4 total=0 l i=0 start=0 shown
+    while IFS= read -r l; do total=$((total+1)); done <<EOF
+$t
+EOF
+    if [ "$tl" = 1 ] && [ $total -gt $max ]; then start=$((total-max)); fi
+    while IFS= read -r l; do
+        if [ $i -ge $start ] && [ $i -lt $((start+max)) ]; then
+            if [ "$cur" = 1 ] && [ $i -eq $((total-1)) ]; then l="${l}_"; fi
+            crow $((i-start)) "$l" "$TXA"
+        fi
+        i=$((i+1))
+    done <<EOF
+$t
+EOF
+    shown=$((total-start)); [ $shown -gt $max ] && shown=$max
+    while [ $shown -lt $max ]; do crow $shown "" "$TXA"; shown=$((shown+1)); done
 }
 
-update_clock() {
-    now=$(date +"%H:%M")
-    printf "%s%s[1;72H%s%s%s%s" "$SAVE" "$ESC" "$YEL" "$now" "$FG" "$REST"
+# emit_list <list> <sel> <top> <maxrows> <row0>   (sets LTOP)
+emit_list() {
+    local lst="$1" sel=$2 top=$3 max=$4 row0=$5 i=0 shown=0 l a
+    [ $sel -lt $top ] && top=$sel
+    [ $sel -ge $((top+max)) ] && top=$((sel-max+1))
+    LTOP=$top
+    while IFS= read -r l; do
+        if [ $i -ge $top ] && [ $i -lt $((top+max)) ]; then
+            if [ $i -eq $sel ]; then a="$SELA"; else a="$BODY"; fi
+            crow $((i-top+row0)) " $l" "$a"
+            shown=$((shown+1))
+        fi
+        i=$((i+1))
+    done <<EOF
+$lst
+EOF
+    while [ $shown -lt $max ]; do crow $((shown+row0)) "" "$BODY"; shown=$((shown+1)); done
 }
 
-draw_frame() {
-    printf "%s%s%s" "$CLR" "$BG" "$FG"
-    printf "%s\n" "${YEL} File   Options   View   Tree   Help                                          ${FG}"
-    printf "%s\n" "$SEP"
-    printf "\n"
-    printf "%s\n" "                       ${WHT}MS-DOS Shell -- ClaudeDOS${FG}"
-    printf "\n"
-    printf "  +%s+\n" "$DASHES"
-    box_line ""
-    box_line "    [1]  Command Prompt"
-    box_line "    [2]  Useful Tools"
-    box_line "    [3]  Misc"
-    box_line "    [4]  Shut Down"
-    box_line ""
-    printf "  +%s+\n" "$DASHES"
-    printf "\n"
-    printf "%s" "  ${YEL}Type a number and press ENTER: ${WHT}"
-    update_clock
+count_lines() { CNT=0; local l; while IFS= read -r l; do CNT=$((CNT+1)); done <<EOF
+$1
+EOF
 }
 
-# ---------------- FILE MANAGER ----------------
-file_manager() {
-    dir="/root"
-    while true; do
-        printf "%s%s%s" "$CLR" "$BG" "$FG"
-        printf "%s\n" "${YEL} File Manager -- ${dir}${FG}"
-        printf "%s\n" "$SEP"
-        ls -la "$dir" 2>/dev/null
-        printf "\n"
-        printf "%s" "${YEL}Type a directory name to enter, '..' to go up, or 'menu' to return: ${WHT}"
-        read choice
-        case "$choice" in
-            menu) return ;;
-            ..) dir=$(dirname "$dir") ;;
-            "") ;;
-            *)
-                if [ -d "$dir/$choice" ]; then
-                    dir="$dir/$choice"
-                else
-                    printf "\n${YEL}No such directory.${RST}\n"
-                    sleep 1
-                fi
-                ;;
-        esac
-    done
+nth_line() { NTH=""; local i=0 l; while IFS= read -r l; do [ $i -eq $2 ] && NTH="$l"; i=$((i+1)); done <<EOF
+$1
+EOF
 }
 
-# ---------------- FREE-TYPING TEXT EDITOR ----------------
-text_editor() {
-    file="/root/scratch.txt"
-    [ -f "$file" ] || : > "$file"
-
-    printf "%s%s%s" "$CLR" "$BG" "$FG"
-    printf "%s\n" "${YEL} Text Editor -- ${file}${FG}"
-    printf "%s\n" "$SEP"
-    printf "%s\n" "${YEL}Just type. Ctrl+S = Save   Ctrl+X = Exit${FG}"
-    printf "%s\n" "$SEP"
-    printf "\n"
-
-    buf=""
-    if [ -s "$file" ]; then
-        buf=$(cat "$file")
-        printf "%s" "$buf"
+# ---------------------------------------------------------------
+#  window frame
+# ---------------------------------------------------------------
+draw_window() {
+    local id=$1 r TA T
+    geom $id
+    g $id title T
+    if [ "$id" = "$FOCUS" ]; then TA="$TON"; else TA="$TOFF"; fi
+    if [ $((X+W)) -le $COLS ] && [ $((Y+H)) -le $((ROWS-1)) ]; then
+        r=$((Y+1))
+        while [ $r -le $((Y+H)) ]; do
+            printf '\033[%d;%dH%s ' $r $((X+W)) "$SHAD"
+            r=$((r+1))
+        done
+        printf '\033[%d;%dH%s%*s' $((Y+H)) $((X+1)) "$SHAD" $W ''
     fi
-
-    ENTER=$(printf '\r')
-    BACKSPACE=$(printf '\177')
-    CTRLS=$(printf '\023')
-    CTRLX=$(printf '\030')
-
-    stty raw -echo
-    while true; do
-        c=$(dd bs=1 count=1 2>/dev/null)
-        case "$c" in
-            "$ENTER")
-                buf="${buf}
-"
-                printf '\r\n'
-                ;;
-            "$BACKSPACE")
-                if [ -n "$buf" ]; then
-                    buf="${buf%?}"
-                    printf '\b \b'
-                fi
-                ;;
-            "$CTRLS")
-                printf "%s" "$buf" > "$file"
-                stty sane
-                printf "\r\n${YEL}[Saved]${RST}\r\n"
-                stty raw -echo
-                ;;
-            "$CTRLX")
-                stty sane
-                return
-                ;;
-            "") ;;
-            *)
-                buf="${buf}${c}"
-                printf "%s" "$c"
-                ;;
-        esac
+    printf '\033[%d;%dH%s%-*.*s[=][x]%s' $Y $X "$TA" $((W-6)) $((W-6)) " $T" "$RST"
+    r=$((Y+1))
+    while [ $r -lt $((Y+H-1)) ]; do
+        printf '\033[%d;%dH%s|%*s|' $r $X "$BODY" $((W-2)) ''
+        r=$((r+1))
     done
+    printf '\033[%d;%dH%s+%.*s+%s' $((Y+H-1)) $X "$BODY" $((W-2)) "$DASHES" "$RST"
 }
 
-# ---------------- COMMAND PROMPT ----------------
-command_prompt() {
-    printf "%s%s%s" "$CLR" "$RST" ""
-    printf "Command Prompt -- type 'exit' to return to the menu\n\n"
-    HOME=/root sh
-}
-
-# ---------------- SYSTEM INFO ----------------
-system_info() {
-    printf "%s%s%s" "$CLR" "$BG" "$FG"
-    printf "%s\n" "${YEL} System Info${FG}"
-    printf "%s\n" "$SEP"
-    printf "\n"
-    printf "Kernel:  %s\n" "$(uname -srmo)"
-    printf "\n"
-    printf "Memory:\n"
-    free
-    printf "\n"
-    printf "Disk:\n"
-    df -h
-    printf "\n"
-    printf "%s" "${YEL}Press ENTER to return: ${WHT}"
-    read _
-}
-
-# ---------------- CALCULATOR ----------------
-calculator() {
-    printf "%s%s%s" "$CLR" "$BG" "$FG"
-    printf "%s\n" "${YEL} Calculator${FG}"
-    printf "%s\n" "$SEP"
-    printf "\n"
-    printf "%s" "First number: "
-    read a
-    printf "%s" "Operator (+ - x /): "
-    read op
-    printf "%s" "Second number: "
-    read b
-    case "$op" in
-        +) r=$((a + b)) ;;
-        -) r=$((a - b)) ;;
-        x|\*) r=$((a * b)) ;;
-        /) r=$((a / b)) ;;
-        *) r="?" ;;
+draw_content() {
+    local TYPE
+    g $1 type TYPE
+    cgeom $1
+    TXA="$BODY"
+    case "$TYPE" in
+        note)   c_note $1 ;;
+        files)  c_files $1 ;;
+        term)   c_term $1 ;;
+        calc)   c_calc $1 ;;
+        info)   c_info $1 ;;
+        launch) c_launch $1 ;;
     esac
-    printf "\nResult: %s %s %s = %s\n" "$a" "$op" "$b" "$r"
-    printf "\n%s" "${YEL}Press ENTER to return: ${WHT}"
-    read _
+    printf '%s' "$RST"
 }
 
-# ---------------- ABOUT ----------------
-about() {
-    kernel=$(uname -r)
-    arch=$(uname -m)
-    host=$(hostname 2>/dev/null)
-    [ -z "$host" ] && host="custom-linux"
-
-    uptime_secs=$(cut -d. -f1 /proc/uptime 2>/dev/null)
-    if [ -n "$uptime_secs" ]; then
-        up_h=$((uptime_secs / 3600))
-        up_m=$(((uptime_secs % 3600) / 60))
-        uptime_str="${up_h}h ${up_m}m"
+draw_topbar() {
+    local a m
+    if [ "$MODE" = wm ]; then
+        a="$WMA"
+        m=" WINDOW MODE | Arrows:move +/-:size Tab:next M:max X:close N:start Esc:back"
     else
-        uptime_str="unknown"
+        a="$TOPA"
+        m=" ClaudeDOS Desktop | Esc:window mode  ^N:start  ^X:close  | mouse: click/drag"
     fi
+    printf '\033[1;1H%s%-*.*s%s' "$a" $COLS $COLS "$m" "$RST"
+}
 
-    cpu=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//')
-    [ -z "$cpu" ] && cpu=$(grep -m1 "Hardware" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//')
-    [ -z "$cpu" ] && cpu="unknown"
+draw_clock() {
+    printf '\033[%d;%dH%s %s %s' $ROWS $((COLS-6)) "$BARA" "$NOW" "$RST"
+}
 
-    cores=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null)
+draw_taskbar() {
+    local bar=" Start ^N |" i=1 T e pos=11
+    while [ $i -lt $NEXT ]; do
+        g $i type T
+        if [ -n "$T" ]; then
+            g $i title T
+            if [ "$i" = "$FOCUS" ]; then e=" <${T%% -*}>"; else e=" [${T%% -*}]"; fi
+            s $i tbs $((pos+1)); s $i tbe $((pos+${#e}))
+            pos=$((pos+${#e}))
+            bar="${bar}${e}"
+        fi
+        i=$((i+1))
+    done
+    printf '\033[%d;1H%s%-*.*s%s' $ROWS "$BARA" $COLS $COLS "$bar" "$RST"
+    draw_clock
+}
 
-    mem_total_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB')
-    mem_avail_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB')
-    if [ -n "$mem_total_kb" ] && [ -n "$mem_avail_kb" ]; then
-        mem_used_mb=$(( (mem_total_kb - mem_avail_kb) / 1024 ))
-        mem_total_mb=$(( mem_total_kb / 1024 ))
-        mem_str="${mem_used_mb}MiB / ${mem_total_mb}MiB"
+do_redraw() {
+    local i
+    printf '%s%s%s' "${ESC}[?25l" "$DESKA" "${ESC}[2J"
+    draw_topbar
+    for i in $ORDER; do draw_window $i; draw_content $i; done
+    draw_taskbar
+}
+redraw() { NOW=$(date +%H:%M); paint do_redraw; }
+
+# ---------------------------------------------------------------
+#  window management
+# ---------------------------------------------------------------
+newwin() {  # type title w h
+    local n x y cnt
+    set -- "$1" "$2" "$3" "$4"
+    cnt=0; for n in $ORDER; do cnt=$((cnt+1)); done
+    [ $cnt -ge 8 ] && return 1
+    NEWID=$NEXT; NEXT=$((NEXT+1))
+    s $NEWID type "$1"; s $NEWID title "$2"; s $NEWID w "$3"; s $NEWID h "$4"
+    n=$(( cnt % 6 ))
+    x=$((4+n*4)); y=$((3+n*2))
+    [ $((x+$3)) -gt $COLS ] && x=$((COLS-$3))
+    [ $x -lt 1 ] && x=1
+    [ $((y+$4)) -gt $((ROWS-1)) ] && y=$((ROWS-1-$4))
+    [ $y -lt 2 ] && y=2
+    s $NEWID x $x; s $NEWID y $y; s $NEWID max 0
+    ORDER="$ORDER $NEWID"; FOCUS=$NEWID
+    return 0
+}
+
+close_win() {
+    local id=$1 n="" i
+    for i in $ORDER; do [ "$i" != "$id" ] && n="$n $i"; done
+    ORDER="$n"
+    s $id type ""
+    FOCUS=""
+    for i in $ORDER; do FOCUS=$i; done
+}
+
+raise_win() {
+    local id=$1 n="" i
+    for i in $ORDER; do [ "$i" != "$id" ] && n="$n $i"; done
+    ORDER="$n $id"; FOCUS=$id
+}
+
+cycle_win() {
+    local first rest
+    set -- $ORDER
+    [ $# -lt 2 ] && return
+    first=$1; shift
+    ORDER="$* $first"
+    FOCUS=""; for first in $ORDER; do FOCUS=$first; done
+}
+
+move_win() {  # dx dy
+    local nx ny
+    geom $FOCUS
+    nx=$((X+$1)); ny=$((Y+$2))
+    [ $nx -gt $((COLS-W)) ] && nx=$((COLS-W))
+    [ $nx -lt 1 ] && nx=1
+    [ $ny -gt $((ROWS-1-H)) ] && ny=$((ROWS-1-H))
+    [ $ny -lt 2 ] && ny=2
+    s $FOCUS x $nx; s $FOCUS y $ny
+}
+
+resize_win() {  # dw dh
+    local nw nh
+    geom $FOCUS
+    nw=$((W+$1)); nh=$((H+$2))
+    [ $nw -lt 26 ] && nw=26
+    [ $nh -lt 8 ] && nh=8
+    [ $((X+nw)) -gt $COLS ] && nw=$((COLS-X))
+    [ $((Y+nh)) -gt $((ROWS-1)) ] && nh=$((ROWS-1-Y))
+    s $FOCUS w $nw; s $FOCUS h $nh; s $FOCUS max 0
+}
+
+toggle_max() {
+    local id=$FOCUS m
+    g $id max m
+    if [ "$m" = 1 ]; then
+        g $id sx X; g $id sy Y; g $id sw W; g $id sh H
+        s $id x $X; s $id y $Y; s $id w $W; s $id h $H; s $id max 0
     else
-        mem_str="unknown"
+        geom $id
+        s $id sx $X; s $id sy $Y; s $id sw $W; s $id sh $H
+        s $id x 1; s $id y 2; s $id w $((COLS-1)); s $id h $((ROWS-3)); s $id max 1
     fi
-
-    printf "%s%s%s\n" "$CLR" "$BG" "$FG"
-
-    L01="   .--------------.   "
-    L02="  /|              |\\  "
-    L03=" / |  ___________ | \\ "
-    L04="/  | |...........| |  \\"
-    L05="|  | |...........| |  |"
-    L06="|  | |___________| |  |"
-    L07="|__|_______________|__|"
-    L08="   |_______________|   "
-    L09="    \\_____________/    "
-    L10="                        "
-
-    I01="${YEL}root${FG}@${YEL}${host}${FG}"
-    I02="--------------------"
-    I03="${WHT}OS${FG}:      ClaudeDOS (DOS Shell Edition)"
-    I04="${WHT}Kernel${FG}:  ${kernel} (${arch})"
-    I05="${WHT}Uptime${FG}:  ${uptime_str}"
-    I06="${WHT}Shell${FG}:   busybox ash"
-    I07="${WHT}Init${FG}:    custom /init (no systemd)"
-    I08="${WHT}CPU${FG}:     ${cpu} (${cores} core[s])"
-    I09="${WHT}Memory${FG}:  ${mem_str}"
-    I10=""
-
-    printf "\n"
-    printf "  ${YEL}%s${FG}  %b\n" "$L01" "$I01"
-    printf "  ${YEL}%s${FG}  %b\n" "$L02" "$I02"
-    printf "  ${YEL}%s${FG}  %b\n" "$L03" "$I03"
-    printf "  ${YEL}%s${FG}  %b\n" "$L04" "$I04"
-    printf "  ${YEL}%s${FG}  %b\n" "$L05" "$I05"
-    printf "  ${YEL}%s${FG}  %b\n" "$L06" "$I06"
-    printf "  ${YEL}%s${FG}  %b\n" "$L07" "$I07"
-    printf "  ${YEL}%s${FG}  %b\n" "$L08" "$I08"
-    printf "  ${YEL}%s${FG}  %b\n" "$L09" "$I09"
-    printf "  ${YEL}%s${FG}  %b\n" "$L10" "$I10"
-    printf "\n"
-    printf "%s" "  ${YEL}Press ENTER to return: ${WHT}"
-    read _
 }
 
-# ---------------- SUBMENUS ----------------
-useful_tools_menu() {
-    while true; do
-        printf "%s%s%s" "$CLR" "$BG" "$FG"
-        printf "%s\n" "${YEL} Useful Tools${FG}"
-        printf "%s\n" "$SEP"
-        printf "\n"
-        printf "  +%s+\n" "$DASHES"
-        box_line ""
-        box_line "    [1]  System Info"
-        box_line "    [2]  Calculator"
-        box_line "    [3]  About"
-        box_line "    [0]  Back"
-        box_line ""
-        printf "  +%s+\n" "$DASHES"
-        printf "\n"
-        printf "%s" "  ${YEL}Type a number and press ENTER: ${WHT}"
-        read c
-        case "$c" in
-            1) system_info ;;
-            2) calculator ;;
-            3) about ;;
-            0) return ;;
-            *) ;;
-        esac
-    done
+# ---------------------------------------------------------------
+#  NOTEPAD
+# ---------------------------------------------------------------
+open_note() {  # file
+    local b="" sz
+    newwin note "Notepad - ${1##*/}" 50 16 || return
+    s $NEWID file "$1"; s $NEWID msg ""
+    if [ -f "$1" ]; then
+        sz=$(wc -c < "$1")
+        if [ "$sz" -lt 30000 ]; then b=$(cat "$1"); else s $NEWID msg " [file too big to load]"; fi
+    fi
+    s $NEWID buf "$b"
 }
 
-misc_menu() {
-    while true; do
-        printf "%s%s%s" "$CLR" "$BG" "$FG"
-        printf "%s\n" "${YEL} Misc${FG}"
-        printf "%s\n" "$SEP"
-        printf "\n"
-        printf "  +%s+\n" "$DASHES"
-        box_line ""
-        box_line "    [1]  File Manager"
-        box_line "    [2]  Text Editor"
-        box_line "    [0]  Back"
-        box_line ""
-        printf "  +%s+\n" "$DASHES"
-        printf "\n"
-        printf "%s" "  ${YEL}Type a number and press ENTER: ${WHT}"
-        read c
-        case "$c" in
-            1) file_manager ;;
-            2) text_editor ;;
-            0) return ;;
-            *) ;;
-        esac
-    done
+c_note() {
+    local B F M
+    g $1 buf B; g $1 file F; g $1 msg M
+    emit_text "$B" $((CH-1)) 1 1
+    crow $((CH-1)) " ^S Save  ^X Close  ${F##*/}${M}" "$STAT"
 }
 
-# ---------------- TOP LEVEL ----------------
-mkdir -p /root
-
-draw_frame
-while true; do
-    read choice
-    case "$choice" in
-        1) command_prompt ;;
-        2) useful_tools_menu ;;
-        3) misc_menu ;;
-        4)
-            printf "%s%sShutting down...%s\n" "$CLR" "$RST" ""
-            sleep 1
-            poweroff -f
-            ;;
-        *) ;;
+k_note() {
+    local id=$1 B F M last
+    cgeom $id
+    g $id buf B; g $id file F
+    M=""
+    case "$KEY" in
+        "$K_ENTER") B="${B}${NL}" ;;
+        "$K_BS"|"$K_BS2") B=${B%?} ;;
+        "$K_CS")
+            mkdir -p "${F%/*}" 2>/dev/null
+            if printf '%s' "$B" > "$F" 2>/dev/null; then M="  [Saved]"; else M="  [Save failed]"; fi ;;
+        "$TAB") B="${B}  " ;;
+        UP|DOWN|LEFT|RIGHT|ESC|OTHER|DEL) return ;;
+        *[[:cntrl:]]*) return ;;
+        *) B="${B}${KEY}" ;;
     esac
-    draw_frame
+    last=${B##*"$NL"}
+    if [ ${#last} -ge $((CW-2)) ]; then B="${B}${NL}"; fi
+    s $id buf "$B"; s $id msg "$M"
+}
+
+# ---------------------------------------------------------------
+#  FILES
+# ---------------------------------------------------------------
+files_load() {
+    local out
+    g $1 dir D
+    out=$(ls -Ap "$D" 2>/dev/null)
+    if [ -n "$out" ]; then s $1 list "../${NL}${out}"; else s $1 list "../"; fi
+    g $1 list L; count_lines "$L"
+    s $1 count $CNT; s $1 sel 0; s $1 top 0
+}
+
+c_files() {
+    local D L SEL TOP
+    g $1 dir D; g $1 list L; g $1 sel SEL; g $1 top TOP
+    crow 0 " $D" "$STAT"
+    emit_list "$L" $SEL $TOP $((CH-2)) 1
+    s $1 top $LTOP
+    crow $((CH-1)) " Enter:Open  Bksp:Up  ^X:Close" "$STAT"
+}
+
+k_files() {
+    local id=$1 D SEL CNT2 L
+    g $id dir D; g $id sel SEL; g $id count CNT2; g $id list L
+    case "$KEY" in
+        UP)   [ $SEL -gt 0 ] && SEL=$((SEL-1)) ;;
+        DOWN) [ $SEL -lt $((CNT2-1)) ] && SEL=$((SEL+1)) ;;
+        "$K_BS"|"$K_BS2")
+            s $id dir "$(dirname "$D")"; files_load $id; return ;;
+        "$K_ENTER")
+            nth_line "$L" $SEL
+            case "$NTH" in
+                "../") s $id dir "$(dirname "$D")"; files_load $id ;;
+                */)    s $id dir "${D%/}/${NTH%/}"; files_load $id ;;
+                *)     open_note "${D%/}/$NTH"; ACT=full ;;
+            esac
+            return ;;
+    esac
+    s $id sel $SEL
+}
+
+# ---------------------------------------------------------------
+#  TERMINAL (one command at a time; use the full-screen shell for more)
+# ---------------------------------------------------------------
+c_term() {
+    local O D IN
+    g $1 out O; g $1 dir D; g $1 in IN
+    TXA="$TERMA"
+    emit_text "$O" $((CH-1)) 1 0
+    crow $((CH-1)) "${D}> ${IN}_" "$TERMA"
+}
+
+k_term() {
+    local id=$1 O D IN cmd arg nd res
+    cgeom $id
+    g $id out O; g $id dir D; g $id in IN
+    case "$KEY" in
+        "$K_ENTER")
+            cmd=$IN; IN=""
+            O="${O}${D}> ${cmd}${NL}"
+            case "$cmd" in
+                "") ;;
+                cd|cd\ *)
+                    arg=${cmd#cd}; arg=${arg# }; [ -z "$arg" ] && arg=/root
+                    case "$arg" in /*) nd="$arg" ;; *) nd="$D/$arg" ;; esac
+                    if [ -d "$nd" ]; then D=$(cd "$nd" && pwd); else O="${O}cd: no such directory${NL}"; fi ;;
+                clear) O="" ;;
+                exit) close_win $id; ACT=full; return ;;
+                *) res=$( (cd "$D" && eval "$cmd") 2>&1 </dev/null ); O="${O}${res}${NL}" ;;
+            esac
+            O="$(printf '%s' "$O" | tail -n 200)${NL}" ;;
+        "$K_BS"|"$K_BS2") IN=${IN%?} ;;
+        UP|DOWN|LEFT|RIGHT|ESC|OTHER|DEL) return ;;
+        *[[:cntrl:]]*) return ;;
+        *) [ ${#IN} -lt $((CW-${#D}-4)) ] && IN="${IN}${KEY}" ;;
+    esac
+    s $id out "$O"; s $id dir "$D"; s $id in "$IN"
+}
+
+# ---------------------------------------------------------------
+#  CALCULATOR
+# ---------------------------------------------------------------
+c_calc() {
+    local H2 IN
+    g $1 hist H2; g $1 in IN
+    emit_text "$H2" $((CH-2)) 1 0
+    crow $((CH-2)) "" "$BODY"
+    crow $((CH-1)) " > ${IN}_" "$STAT"
+}
+
+k_calc() {
+    local id=$1 H2 IN r
+    cgeom $id
+    g $id hist H2; g $id in IN
+    case "$KEY" in
+        "$K_ENTER")
+            case "$IN" in
+                "") ;;
+                *[!0-9+*/%\(\)" "-]*) H2="${H2} ${IN}${NL}    = invalid characters${NL}" ;;
+                *)
+                    if r=$( (echo $((IN))) 2>/dev/null ); then H2="${H2} ${IN}${NL}    = ${r}${NL}"
+                    else H2="${H2} ${IN}${NL}    = error${NL}"; fi ;;
+            esac
+            IN=""
+            H2="$(printf '%s' "$H2" | tail -n 60)${NL}" ;;
+        "$K_BS"|"$K_BS2") IN=${IN%?} ;;
+        UP|DOWN|LEFT|RIGHT|ESC|OTHER|DEL) return ;;
+        *[[:cntrl:]]*) return ;;
+        *) [ ${#IN} -lt $((CW-6)) ] && IN="${IN}${KEY}" ;;
+    esac
+    s $id hist "$H2"; s $id in "$IN"
+}
+
+# ---------------------------------------------------------------
+#  INFO WINDOWS (System Info / About / Help)
+# ---------------------------------------------------------------
+c_info() {
+    local T
+    g $1 txt T
+    emit_text "$T" $((CH-1)) 0 0
+    crow $((CH-1)) " R:Refresh  ^X:Close" "$STAT"
+}
+
+k_info() {
+    local B
+    case "$KEY" in
+        r|R) g $1 builder B; $B; s $1 txt "$TXT" ;;
+    esac
+}
+
+open_info() {  # builder title w h
+    newwin info "$2" $3 $4 || return
+    s $NEWID builder "$1"
+    $1
+    s $NEWID txt "$TXT"
+}
+
+hostname_s() { HN=$(hostname 2>/dev/null); case "$HN" in ""|"(none)") HN=claudedos ;; esac; }
+
+build_sys() {
+    local up t a cpu cores
+    hostname_s
+    up=$(cut -d. -f1 /proc/uptime 2>/dev/null); up=${up:-0}
+    t=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); t=${t:-0}
+    a=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); a=${a:-0}
+    cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//'); cpu=${cpu:-unknown}
+    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+    TXT=" Host    : ${HN}${NL} Kernel  : $(uname -sr) ($(uname -m))${NL} Uptime  : $((up/3600))h $(((up%3600)/60))m $((up%60))s${NL} CPU     : ${cpu}${NL} Cores   : ${cores}${NL} Memory  : $(((t-a)/1024)) / $((t/1024)) MiB${NL} Screen  : ${COLS}x${ROWS} text${NL}${NL} Disks:${NL}$(df -h 2>/dev/null | head -5)"
+}
+
+build_about() {
+    local up t a cpu cores
+    hostname_s
+    up=$(cut -d. -f1 /proc/uptime 2>/dev/null); up=${up:-0}
+    t=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); t=${t:-0}
+    a=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); a=${a:-0}
+    cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//'); cpu=${cpu:-unknown}
+    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+    L1='   .--------------.   '
+    L2='  /|              |\  '
+    L3=' / |  ___________ | \ '
+    L4='/  | |...........| |  \'
+    L5='|  | |...........| |  |'
+    L6='|  | |___________| |  |'
+    L7='|__|_______________|__|'
+    L8='   |_______________|   '
+    L9='    \_____________/    '
+    TXT="${NL} ${L1}  root@${HN}${NL} ${L2}  ----------------${NL} ${L3}  OS:      ClaudeDOS Desktop${NL} ${L4}  Kernel:  $(uname -r)${NL} ${L5}  Uptime:  $((up/3600))h $(((up%3600)/60))m${NL} ${L6}  Shell:   busybox ash${NL} ${L7}  Init:    custom /init${NL} ${L8}  CPU:     ${cpu}${NL} ${L9}  Memory:  $(((t-a)/1024))/$((t/1024)) MiB (${cores} cpu)"
+}
+
+build_help() {
+    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} ESC or Ctrl+W   window mode (red bar on top)${NL}   arrows   move the window${NL}   + / -    make it bigger / smaller${NL}   Tab      switch to the next window${NL}   M        maximize / restore${NL}   X        close the window${NL}   N        open the Start menu${NL}   ESC      back to the app${NL}${NL} Ctrl+N   Start menu    Ctrl+X   close window${NL} Ctrl+S   save (Notepad)${NL}${NL} MOUSE: click a window to focus it, drag${NL} its title bar to move, [=] maximize,${NL} [x] close, drag the bottom-right corner${NL} to resize, click the taskbar to switch."
+}
+
+# ---------------------------------------------------------------
+#  START MENU
+# ---------------------------------------------------------------
+LAUNCH_ITEMS="1  Notepad${NL}2  Files${NL}3  Terminal${NL}4  Calculator${NL}5  System Info${NL}6  About ClaudeDOS${NL}7  Help${NL}8  Full-screen Shell${NL}9  Shut Down${NL}0  Reboot"
+
+open_launcher() {
+    local i
+    for i in $ORDER; do
+        g $i type T
+        if [ "$T" = launch ]; then raise_win $i; return; fi
+    done
+    newwin launch "Start" 30 14 || return
+    s $NEWID x 2; s $NEWID y 2; s $NEWID sel 0
+}
+
+c_launch() {
+    local SEL
+    g $1 sel SEL
+    crow 0 "" "$BODY"
+    emit_list "$LAUNCH_ITEMS" $SEL 0 10 1
+    crow $((CH-1)) " Number or Enter. Esc=cancel" "$STAT"
+}
+
+k_launch() {
+    local id=$1 sel
+    g $id sel sel
+    case "$KEY" in
+        UP)   [ $sel -gt 0 ] && sel=$((sel-1)) ;;
+        DOWN) [ $sel -lt 9 ] && sel=$((sel+1)) ;;
+        "$K_ENTER") close_win $id; launch $(( (sel+1) % 10 )); ACT=full; return ;;
+        [0-9]) close_win $id; launch $KEY; ACT=full; return ;;
+    esac
+    s $id sel $sel
+}
+
+launch() {
+    case "$1" in
+        1) open_note /root/scratch.txt ;;
+        2) newwin files "Files" 46 16 && { s $NEWID dir /root; files_load $NEWID; } ;;
+        3) newwin term "Terminal" 62 16 && { s $NEWID dir /root; s $NEWID out "ClaudeDOS terminal. One command at a time.${NL}Try: ls, cat, ps, free, df, dmesg${NL}"; s $NEWID in ""; } ;;
+        4) newwin calc "Calculator" 38 13 && { s $NEWID hist " Type e.g. 12*(3+4) and press Enter${NL}"; s $NEWID in ""; } ;;
+        5) open_info build_sys "System Info" 58 16 ;;
+        6) open_info build_about "About ClaudeDOS" 62 15 ;;
+        7) open_info build_help "Help" 56 22 ;;
+        8) fs_shell ;;
+        9) shutdown_now ;;
+        0) reboot_now ;;
+    esac
+}
+
+fs_shell() {
+    local pid
+    pid=$(cat /tmp/kbm.pid 2>/dev/null)
+    [ -n "$pid" ] && kill -USR1 $pid 2>/dev/null
+    sleep 0.3 2>/dev/null || sleep 1
+    stty -F /dev/tty sane
+    printf '%s[?25h%s[0m%s[2J%s[H%s[?7h' "$ESC" "$ESC" "$ESC" "$ESC" "$ESC"
+    printf 'ClaudeDOS full-screen shell. Type "exit" to return to the desktop.\n\n'
+    HOME=/root sh </dev/tty
+    [ -n "$pid" ] && kill -CONT $pid 2>/dev/null
+    printf '%s[?25l%s[?7l' "$ESC" "$ESC"
+}
+
+shutdown_now() {
+    printf '%s[0m%s[2J%s[H%s[?25h%s[?7hShutting down ClaudeDOS...\n' "$ESC" "$ESC" "$ESC" "$ESC" "$ESC"
+    sync; sleep 1; poweroff -f
+}
+reboot_now() {
+    printf '%s[0m%s[2J%s[H%s[?25h%s[?7hRebooting...\n' "$ESC" "$ESC" "$ESC" "$ESC" "$ESC"
+    sync; sleep 1; reboot -f
+}
+
+# ---------------------------------------------------------------
+#  input
+# ---------------------------------------------------------------
+read_key() {
+    IFS= read -r LINE || exit 0
+    EVT=${LINE%"${LINE#?}"}
+    VAL=${LINE#?}
+    KEY=""
+    case "$EVT" in
+        p) KEY="$VAL" ;;
+        c) case "$VAL" in
+               13) KEY="$K_ENTER" ;;
+               127) KEY="$K_BS" ;;
+               8) KEY="$K_BS2" ;;
+               9) KEY="$TAB" ;;
+               19) KEY="$K_CS" ;;
+               24) KEY="$K_CX" ;;
+               23) KEY="$K_CW" ;;
+               14) KEY="$K_CN" ;;
+               *) KEY=OTHER ;;
+           esac ;;
+        n) KEY="$VAL" ;;
+        d|u|g) KEY=MOUSE; MT="$EVT"; set -- $VAL; MC=$1; MR=$2 ;;
+    esac
+}
+
+wm_key() {
+    case "$KEY" in
+        UP)    [ -n "$FOCUS" ] && { move_win 0 -1; ACT=full; } ;;
+        DOWN)  [ -n "$FOCUS" ] && { move_win 0 1; ACT=full; } ;;
+        LEFT)  [ -n "$FOCUS" ] && { move_win -2 0; ACT=full; } ;;
+        RIGHT) [ -n "$FOCUS" ] && { move_win 2 0; ACT=full; } ;;
+        "+"|"=") [ -n "$FOCUS" ] && { resize_win 4 2; ACT=full; } ;;
+        "-"|"_") [ -n "$FOCUS" ] && { resize_win -4 -2; ACT=full; } ;;
+        "$TAB")  cycle_win; ACT=full ;;
+        m|M)   [ -n "$FOCUS" ] && { toggle_max; ACT=full; } ;;
+        x|X)   [ -n "$FOCUS" ] && { close_win $FOCUS; ACT=full; } ;;
+        n|N)   open_launcher; MODE=app; ACT=full ;;
+        ESC|"$K_ENTER"|" ") MODE=app; ACT=top ;;
+    esac
+}
+
+app_key() {
+    local T
+    g $FOCUS type T
+    case "$T" in
+        note)   k_note $FOCUS ;;
+        files)  k_files $FOCUS ;;
+        term)   k_term $FOCUS ;;
+        calc)   k_calc $FOCUS ;;
+        info)   k_info $FOCUS ;;
+        launch) k_launch $FOCUS ;;
+    esac
+    [ -z "$ACT" ] && ACT=content
+}
+
+tick() {
+    local n
+    n=$(date +%H:%M)
+    if [ "$n" != "$NOW" ]; then NOW=$n; paint draw_clock; fi
+}
+
+# ---------------------------------------------------------------
+#  MOUSE
+# ---------------------------------------------------------------
+DRAGID=""; DRAGMODE=""; DRAGDX=0
+
+win_at() {  # col row -> WHIT = topmost window under that cell
+    local rev="" i
+    for i in $ORDER; do rev="$i $rev"; done
+    WHIT=""
+    for i in $rev; do
+        geom $i
+        if [ $1 -ge $X ] && [ $1 -lt $((X+W)) ] && [ $2 -ge $Y ] && [ $2 -lt $((Y+H)) ]; then
+            WHIT=$i; return
+        fi
+    done
+}
+
+close_launchers() {
+    local i T
+    for i in $ORDER; do
+        g $i type T
+        [ "$T" = launch ] && close_win $i
+    done
+}
+
+m_launch() {  # id col row
+    local rr=$(($3-CY)) d
+    if [ $rr -ge 1 ] && [ $rr -le 10 ]; then
+        d=$(( rr % 10 ))
+        close_win $1; launch $d; ACT=full
+    fi
+}
+
+m_files() {  # id col row
+    local rr=$(($3-CY)) SEL TOP CNT2 idx
+    g $1 sel SEL; g $1 top TOP; g $1 count CNT2
+    idx=$((rr-1+TOP))
+    if [ $rr -ge 1 ] && [ $rr -le $((CH-2)) ] && [ $idx -lt $CNT2 ]; then
+        if [ $idx -eq $SEL ]; then
+            KEY="$K_ENTER"; k_files $1; ACT=full
+        else
+            s $1 sel $idx; ACT=content
+        fi
+    fi
+}
+
+mouse_down() {  # col row
+    local c=$1 r=$2 i T st en m
+    DRAGID=""
+    if [ $r -eq $ROWS ]; then
+        if [ $c -le 10 ]; then open_launcher; MODE=app; ACT=full; return; fi
+        i=1
+        while [ $i -lt $NEXT ]; do
+            g $i type T
+            if [ -n "$T" ]; then
+                g $i tbs st; g $i tbe en
+                if [ $c -ge $st ] && [ $c -le $en ]; then raise_win $i; MODE=app; ACT=full; return; fi
+            fi
+            i=$((i+1))
+        done
+        return
+    fi
+    win_at $c $r
+    [ -z "$WHIT" ] && return
+    i=$WHIT
+    g $i type T
+    if [ "$T" != launch ]; then close_launchers; fi
+    if [ "$i" != "$FOCUS" ]; then raise_win $i; ACT=full; fi
+    if [ "$MODE" = wm ]; then MODE=app; ACT=full; fi
+    geom $i
+    if [ $r -eq $Y ]; then
+        if [ $c -ge $((X+W-3)) ]; then
+            close_win $i; ACT=full
+        elif [ $c -ge $((X+W-6)) ]; then
+            toggle_max; ACT=full
+        else
+            g $i max m
+            if [ "$m" != 1 ]; then DRAGID=$i; DRAGMODE=move; DRAGDX=$((c-X)); fi
+        fi
+    elif [ $r -eq $((Y+H-1)) ] && [ $c -eq $((X+W-1)) ]; then
+        DRAGID=$i; DRAGMODE=resize
+    else
+        cgeom $i
+        case "$T" in
+            launch) m_launch $i $c $r ;;
+            files)  m_files $i $c $r ;;
+        esac
+    fi
+}
+
+mouse_drag() {  # col row
+    local id=$DRAGID T nx ny nw nh
+    [ -z "$id" ] && return
+    g $id type T
+    if [ -z "$T" ]; then DRAGID=""; return; fi
+    geom $id
+    if [ "$DRAGMODE" = move ]; then
+        nx=$(($1-DRAGDX)); ny=$2
+        [ $nx -gt $((COLS-W)) ] && nx=$((COLS-W))
+        [ $nx -lt 1 ] && nx=1
+        [ $ny -gt $((ROWS-1-H)) ] && ny=$((ROWS-1-H))
+        [ $ny -lt 2 ] && ny=2
+        s $id x $nx; s $id y $ny
+    else
+        nw=$(($1-X+1)); nh=$(($2-Y+1))
+        [ $nw -lt 26 ] && nw=26
+        [ $nh -lt 8 ] && nh=8
+        [ $((X+nw)) -gt $COLS ] && nw=$((COLS-X))
+        [ $((Y+nh)) -gt $((ROWS-1)) ] && nh=$((ROWS-1-Y))
+        s $id w $nw; s $id h $nh; s $id max 0
+    fi
+    ACT=full
+}
+
+# ---------------------------------------------------------------
+#  main
+# ---------------------------------------------------------------
+mkdir -p /root /tmp
+printf '%s[?7l' "$ESC"
+
+open_info build_help "Welcome" 56 22
+redraw
+
+while :; do
+    read_key
+    if [ -z "$KEY" ]; then tick; continue; fi
+    ACT=""
+    if [ "$KEY" = MOUSE ]; then
+        case "$MT" in
+            d) mouse_down $MC $MR ;;
+            g) mouse_drag $MC $MR ;;
+            u) DRAGID="" ;;
+        esac
+    elif [ "$KEY" = "$K_CN" ]; then
+        open_launcher; MODE=app; ACT=full
+    elif [ "$KEY" = "$K_CW" ]; then
+        if [ "$MODE" = wm ]; then MODE=app; else MODE=wm; fi
+        ACT=top
+    elif [ "$MODE" = wm ]; then
+        wm_key
+    elif [ "$KEY" = "$K_CX" ]; then
+        [ -n "$FOCUS" ] && { close_win $FOCUS; ACT=full; }
+    elif [ "$KEY" = ESC ]; then
+        g "${FOCUS:-0}" type T
+        if [ "$T" = launch ]; then close_win $FOCUS; ACT=full; else MODE=wm; ACT=top; fi
+    elif [ -n "$FOCUS" ]; then
+        app_key
+    fi
+    case "$ACT" in
+        full)    redraw ;;
+        content) [ -n "$FOCUS" ] && paint draw_content $FOCUS ;;
+        top)     paint draw_topbar ;;
+    esac
 done
