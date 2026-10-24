@@ -25,8 +25,8 @@ moved, resized, maximized and closed with the keyboard **or the mouse**.
 
 ## Apps
 
-Notepad, Files (click or arrow through directories, open files in Notepad),
-Terminal (one command at a time), Calculator, System Info, About (neofetch
+Desktop icons (My Apps, My Computer, My Files), Settings (themes, timezone; reset on reboot), Notepad, Files (click or arrow through directories, open files in Notepad),
+Terminal (one command at a time), Calculator (`+ - x * / div mod`), System Info, About (neofetch
 style, live data from `/proc`), Help, and a full-screen real shell for
 anything interactive. Start menu = `Ctrl+N` or click **Start**.
 
@@ -44,7 +44,10 @@ anything interactive. Start menu = `Ctrl+N` or click **Start**.
 | click a window | focus / raise it |
 | drag title bar | move |
 | `[=]` / `[x]` | maximize / close |
-| drag bottom-right corner | resize |
+| drag right/bottom edge or corner | resize |
+| double-click | open desktop icons, maximize via title bar |
+| right-click | context menu |
+| wheel | scroll (scrollbar on the right edge) |
 | taskbar entry / **Start** | switch window / open menu |
 | Files: click, click again | select, open |
 
@@ -86,7 +89,7 @@ the ISO draws on the screen, not the serial port).
 - Notepad edits only at the end of the text; no cursor movement inside it.
 - Terminal window runs one command at a time; use the full-screen shell for
   `vi`, `top`, etc.
-- No networking, no package manager, and the clock shows UTC.
+- No networking, no package manager. Clock defaults to UTC (change in Settings).
 - The mouse pointer is a software cursor on the text grid, so it moves one
   character cell at a time.
 

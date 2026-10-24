@@ -1,18 +1,25 @@
 /*
  * kbmouse -- input helper for ClaudeDOS Desktop.
  *
- * Merges the keyboard (/dev/tty, raw) and the mouse (/dev/input/mice, PS/2
- * protocol) into one line-based event stream on stdout for the sh desktop:
+ * Merges the keyboard (/dev/tty, raw) and the mouse (/dev/input/mice) into
+ * one line-based event stream on stdout for the sh desktop:
  *
  *   p<ch>        printable key             c<N>   control byte N (decimal)
  *   n<NAME>      UP DOWN LEFT RIGHT DEL ESC
  *   d<col> <row> 1   left button pressed   (1-based text cells)
+ *   x<col> <row> 1   ...it was a double-click (sent right after its "d")
  *   g<col> <row> 1   moved with button held (rate limited)
  *   u<col> <row> 1   left button released
+ *   r<col> <row> 1   right button pressed
+ *   w<col> <row> <+1|-1>   wheel (+1 = scroll down, -1 = scroll up)
  *   t            one-second tick
  *
- * The mouse pointer is a software cursor: a cell on the text console whose
- * colours are inverted, drawn straight into screen memory via /dev/vcsa.
+ * The pointer is a software cursor: a glyph written straight into console
+ * screen memory through /dev/vcsa. Its shape follows the context:
+ *   normal arrow, left-right arrows over a window's right edge/corner,
+ *   up-down arrows over the bottom edge, and a spinner while the desktop
+ *   is busy (/tmp/busy exists). Window rectangles come from /tmp/wins,
+ *   one "x y w h" line per window, bottom-most first.
  *
  * SIGUSR1 = pause (restore tty, erase pointer, stop); SIGCONT = resume.
  */
@@ -30,8 +37,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef DBLMS
+#define DBLMS 600   /* double-click window in ms (tests build with a larger one) */
+#endif
 #define CELL_W 7   /* mouse counts per text column */
 #define CELL_H 14  /* mouse counts per text row    */
+
+/* VGA/CP437 glyph indices used for the pointer */
+#define G_ARROW 0x10   /* ► */
+#define G_LR    0x1D   /* ↔ */
+#define G_UD    0x12   /* ↕ */
 
 static int tty = -1, mfd = -1, vfd = -1;
 static struct termios orig, rawt;
@@ -78,9 +93,46 @@ static void tty_restore(void)
     if (have_orig) tcsetattr(tty, TCSANOW, &orig);
 }
 
+/* ---------------- window rectangles (for pointer shape) ---------------- */
+#define MAXW 16
+static int wx[MAXW], wy[MAXW], ww[MAXW], wh[MAXW], nwin;
+
+static void load_wins(void)
+{
+    FILE *f = fopen("/tmp/wins", "r");
+    int a, b, c, d;
+    nwin = 0;
+    if (!f) return;
+    while (nwin < MAXW && fscanf(f, "%d %d %d %d", &a, &b, &c, &d) == 4) {
+        wx[nwin] = a; wy[nwin] = b; ww[nwin] = c; wh[nwin] = d;
+        nwin++;
+    }
+    fclose(f);
+}
+
+/* pick the glyph for the pointer at 1-based (col,row) */
+static int spin;
+static uint8_t shape_for(int col, int row)
+{
+    int i;
+    if (access("/tmp/busy", F_OK) == 0) {
+        static const char fr[4] = { '|', '/', '-', '\\' };
+        return (uint8_t)fr[spin++ & 3];
+    }
+    load_wins();
+    for (i = nwin - 1; i >= 0; i--) {
+        int x = wx[i], y = wy[i], w = ww[i], h = wh[i];
+        if (col < x || col >= x + w || row < y || row >= y + h) continue;
+        if (col == x + w - 1 && row > y)                 return G_LR;   /* right edge + corner */
+        if (row == y + h - 1 && col > x)                 return G_UD;   /* bottom edge */
+        return G_ARROW;
+    }
+    return G_ARROW;
+}
+
 /* ---------------- software pointer (vcsa) ---------------- */
 static int pdrawn, pcol, prow;
-static uint8_t pch, pat, pinv;
+static uint8_t pch, pat, sgl, sat;
 
 static int cell_get(int c, int r, uint8_t *ch, uint8_t *at)
 {
@@ -99,12 +151,23 @@ static int cell_put(int c, int r, uint8_t ch, uint8_t at)
     return pwrite(vfd, b, 2, 4 + 2 * ((off_t)r * cols + c)) == 2 ? 0 : -1;
 }
 
+/* foreground colour that stays readable on the cell's background */
+static uint8_t pointer_attr(uint8_t at)
+{
+    switch ((at >> 4) & 7) {
+    case 1:  return (at & 0xF0) | 0x0E;   /* blue  -> yellow */
+    case 3:
+    case 7:  return (at & 0xF0) | 0x00;   /* cyan, gray -> black */
+    default: return (at & 0xF0) | 0x0F;   /* black, red, ... -> white */
+    }
+}
+
 static void pointer_erase(void)
 {
     uint8_t ch, at;
     if (!pdrawn) return;
-    /* only restore if the cell still holds our inverted pointer */
-    if (cell_get(pcol, prow, &ch, &at) == 0 && ch == pch && at == pinv)
+    /* only restore if the cell still holds our pointer */
+    if (cell_get(pcol, prow, &ch, &at) == 0 && ch == sgl && at == sat)
         cell_put(pcol, prow, pch, pat);
     pdrawn = 0;
 }
@@ -115,21 +178,25 @@ static void pointer_show(int c, int r)
     if (cell_get(c, r, &ch, &at) != 0) return;
     pch = ch;
     pat = at;
-    pinv = at ^ 0x77;
-    cell_put(c, r, pch, pinv);
+    sgl = shape_for(c + 1, r + 1);
+    sat = pointer_attr(at);
+    cell_put(c, r, sgl, sat);
     pcol = c;
     prow = r;
     pdrawn = 1;
 }
 
-/* redraw the pointer if the desktop painted over it */
+/* keep the pointer correct: repaint if overwritten, reshape if context changed */
 static void pointer_refresh(int c, int r)
 {
-    uint8_t ch, at;
+    uint8_t ch, at, want;
     if (pdrawn && pcol == c && prow == r &&
-        cell_get(c, r, &ch, &at) == 0 && ch == pch && at == pinv)
+        cell_get(c, r, &ch, &at) == 0 && ch == sgl && at == sat) {
+        want = shape_for(c + 1, r + 1);
+        if (want != sgl) { sgl = want; cell_put(c, r, sgl, sat); }
         return;
-    pointer_erase();
+    }
+    pdrawn = 0;
     pointer_show(c, r);
 }
 
@@ -193,10 +260,11 @@ static void parse_keys(void)
 
 /* ---------------- mouse ---------------- */
 static uint8_t mbuf[64];
-static int mlen;
-static int mx, my, mcol, mrow, mbtn, mactive;
+static int mlen, plen = 3;
+static int mx, my, mcol, mrow, mbtn, mrbtn, mactive;
 static int pending_drag;
-static long last_drag;
+static long last_drag, last_click;
+static int click_col = -1, click_row = -1;
 
 static int accel(int d)
 {
@@ -207,16 +275,18 @@ static int accel(int d)
 
 static void mouse_packets(void)
 {
-    while (mlen >= 3) {
-        int dx, dy, b, ncol, nrow, moved;
+    while (mlen >= plen) {
+        int dx, dy, dz = 0, b, rb, ncol, nrow, moved;
         if (!(mbuf[0] & 8)) {            /* out of sync: drop a byte */
             memmove(mbuf, mbuf + 1, --mlen);
             continue;
         }
         dx = (int8_t)mbuf[1];
         dy = (int8_t)mbuf[2];
+        if (plen == 4) dz = (int8_t)mbuf[3];
         b = mbuf[0] & 1;
-        memmove(mbuf, mbuf + 3, mlen -= 3);
+        rb = (mbuf[0] >> 1) & 1;
+        memmove(mbuf, mbuf + plen, mlen -= plen);
 
         mx += accel(dx);
         my -= accel(dy);
@@ -231,23 +301,49 @@ static void mouse_packets(void)
         mactive = 1;
         if (moved) { pointer_erase(); pointer_show(mcol, mrow); }
 
+        if (dz) emit("w%d %d %d\n", mcol + 1, mrow + 1, dz > 0 ? 1 : -1);
+
         if (b && !mbtn) {
+            long now = now_ms();
             pending_drag = 0;
             emit("d%d %d 1\n", mcol + 1, mrow + 1);
+            if (click_col == mcol && click_row == mrow && now - last_click < DBLMS) {
+                emit("x%d %d 1\n", mcol + 1, mrow + 1);
+                click_col = -1;                 /* no triple-click chains */
+            } else {
+                click_col = mcol; click_row = mrow; last_click = now;
+            }
         } else if (!b && mbtn) {
             if (pending_drag) { emit("g%d %d 1\n", mcol + 1, mrow + 1); pending_drag = 0; }
             emit("u%d %d 1\n", mcol + 1, mrow + 1);
         } else if (b && moved) {
             pending_drag = 1;
         }
+        if (rb && !mrbtn) emit("r%d %d 1\n", mcol + 1, mrow + 1);
         mbtn = b;
+        mrbtn = rb;
     }
 }
 
+/* Ask the kernel's mouse node for IntelliMouse mode (wheel). It answers the
+ * "get id" query with 3 when wheel packets (4 bytes) are enabled. */
 static void mouse_open(void)
 {
-    mfd = open("/dev/input/mice", O_RDONLY | O_NONBLOCK);
+    static const uint8_t magic[] = { 0xf3, 200, 0xf3, 100, 0xf3, 80, 0xf2 };
+    uint8_t tmp[64];
+    ssize_t n;
+    struct timespec ts = { 0, 80 * 1000000L };
+
+    plen = 3;
     mlen = 0;
+    mfd = open("/dev/input/mice", O_RDWR | O_NONBLOCK);
+    if (mfd < 0) mfd = open("/dev/input/mice", O_RDONLY | O_NONBLOCK);
+    if (mfd < 0) return;
+    if (write(mfd, magic, sizeof magic) == (ssize_t)sizeof magic) {
+        nanosleep(&ts, NULL);
+        n = read(mfd, tmp, sizeof tmp);
+        if (n > 0 && tmp[n - 1] == 0x03) plen = 4;
+    }
 }
 
 /* ---------------- signals ---------------- */

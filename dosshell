@@ -1,7 +1,8 @@
 #!/bin/sh
 # ClaudeDOS Desktop -- a windowed text-mode desktop written in plain sh.
 # Every app lives in its own window. Windows overlap, have focus, and can be
-# moved, resized, maximized and closed from the keyboard.
+# moved, resized, maximized and closed with the keyboard or the mouse.
+# Input arrives from /bin/kbmouse as one event per line (see kbmouse.c).
 
 ESC=$(printf '\033')
 NL='
@@ -15,20 +16,66 @@ K_CX=$(printf '\030')   # Ctrl+X
 K_CW=$(printf '\027')   # Ctrl+W
 K_CN=$(printf '\016')   # Ctrl+N
 
-# ---- colours ----
 RST="${ESC}[0m"
-DESKA="${ESC}[0;37;46m"
-BODY="${ESC}[0;30;47m"
-TON="${ESC}[1;37;44m"
-TOFF="${ESC}[0;37;40m"
-SELA="${ESC}[1;37;44m"
-STAT="${ESC}[0;30;46m"
-SHAD="${ESC}[0;30;40m"
-BARA="${ESC}[0;30;47m"
-TOPA="${ESC}[1;37;44m"
-WMA="${ESC}[1;37;41m"
-TERMA="${ESC}[0;37;40m"
+
+# ---------------------------------------------------------------
+#  themes and timezones (settings reset on reboot: everything is RAM)
+# ---------------------------------------------------------------
+THEME_NAMES="teal dosblue amber contrast"
+THEME_IDX=0
+THEME_LABEL="Teal Desktop"
+
+apply_theme() {
+    case "$1" in
+        dosblue)
+            THEME_LABEL="DOS Blue"
+            DESKA="${ESC}[0;34;44m"; BODY="${ESC}[0;30;47m"; TON="${ESC}[0;30;46m"
+            TOFF="${ESC}[0;37;40m"; SELA="${ESC}[0;30;46m"; STAT="${ESC}[1;37;44m"
+            SHAD="${ESC}[0;30;40m"; BARA="${ESC}[0;30;47m"; TOPA="${ESC}[0;30;46m"
+            WMA="${ESC}[1;37;41m"; TERMA="${ESC}[0;37;40m" ;;
+        amber)
+            THEME_LABEL="Amber Terminal"
+            DESKA="${ESC}[0;33;40m"; BODY="${ESC}[0;33;40m"; TON="${ESC}[0;30;43m"
+            TOFF="${ESC}[0;33;40m"; SELA="${ESC}[0;30;43m"; STAT="${ESC}[0;30;43m"
+            SHAD="${ESC}[0;30;40m"; BARA="${ESC}[0;30;43m"; TOPA="${ESC}[0;30;43m"
+            WMA="${ESC}[1;37;41m"; TERMA="${ESC}[0;33;40m" ;;
+        contrast)
+            THEME_LABEL="High Contrast"
+            DESKA="${ESC}[0;37;40m"; BODY="${ESC}[1;37;40m"; TON="${ESC}[0;30;47m"
+            TOFF="${ESC}[1;37;40m"; SELA="${ESC}[0;30;47m"; STAT="${ESC}[0;30;47m"
+            SHAD="${ESC}[0;30;40m"; BARA="${ESC}[0;30;47m"; TOPA="${ESC}[0;30;47m"
+            WMA="${ESC}[1;37;41m"; TERMA="${ESC}[1;37;40m" ;;
+        *)
+            THEME_LABEL="Teal Desktop"
+            DESKA="${ESC}[0;37;46m"; BODY="${ESC}[0;30;47m"; TON="${ESC}[1;37;44m"
+            TOFF="${ESC}[0;37;40m"; SELA="${ESC}[1;37;44m"; STAT="${ESC}[0;30;46m"
+            SHAD="${ESC}[0;30;40m"; BARA="${ESC}[0;30;47m"; TOPA="${ESC}[1;37;44m"
+            WMA="${ESC}[1;37;41m"; TERMA="${ESC}[0;37;40m" ;;
+    esac
+}
+
+TZ_TABLE="UTC|UTC0${NL}US Eastern|EST5EDT,M3.2.0,M11.1.0${NL}US Central|CST6CDT,M3.2.0,M11.1.0${NL}US Mountain|MST7MDT,M3.2.0,M11.1.0${NL}US Pacific|PST8PDT,M3.2.0,M11.1.0${NL}UK|GMT0BST,M3.5.0/1,M10.5.0${NL}Central Europe|CET-1CEST,M3.5.0,M10.5.0/3${NL}India|IST-5:30${NL}Japan|JST-9${NL}Australia East|AEST-10AEDT,M10.1.0,M4.1.0/3"
+TZ_COUNT=10
+TZ_IDX=0
+TZ_LABEL="UTC"
+
+set_tz() {
+    nth_line_basic "$TZ_TABLE" $1
+    TZ_LABEL=${NTH%%|*}
+    TZ=${NTH#*|}
+    export TZ
+}
+
+nth_line_basic() { NTH=""; local i=0 l; while IFS= read -r l; do [ $i -eq $2 ] && NTH="$l"; i=$((i+1)); done <<EOF
+$1
+EOF
+}
+
+nth_word() { local n=$1; shift; shift $n 2>/dev/null; NW=$1; }
+
+apply_theme teal
 TXA="$BODY"
+set_tz 0
 
 DASHES=""
 i=0
@@ -49,6 +96,8 @@ MODE=app
 NOW=""
 NEWID=""
 ACT=""
+ICON_SEL=-1
+ET_TOTAL=0; ET_START=0; ET_MAX=0
 
 # ---- window "records": W_<id>_<field> ----
 g() { eval "$3=\${W_$1_$2}"; }
@@ -57,17 +106,26 @@ geom() { g $1 x X; g $1 y Y; g $1 w W; g $1 h H; }
 cgeom() { geom $1; CX=$((X+1)); CY=$((Y+1)); CW=$((W-2)); CH=$((H-2)); }
 crow() { printf '\033[%d;%dH%s%-*.*s' $((CY+$1)) $CX "$3" $CW $CW "$2"; }
 paint() { "$@" > /tmp/.frame; cat /tmp/.frame; }
+busy_on() { : > /tmp/busy; }
+busy_off() { rm -f /tmp/busy; }
 
 # ---------------------------------------------------------------
 #  text helpers
 # ---------------------------------------------------------------
-# emit_text <text> <maxrows> <tail 0/1> <cursor 0/1>
+# emit_text <text> <maxrows> <tail 0/1> <cursor 0/1> <scroll>
+#   tail=1: show the last rows, <scroll> lines up from the bottom
+#   tail=0: show from line <scroll>
 emit_text() {
-    local t="$1" max=$2 tl=$3 cur=$4 total=0 l i=0 start=0 shown
+    local t="$1" max=$2 tl=$3 cur=$4 sc=${5:-0} total=0 l i=0 start=0 shown
     while IFS= read -r l; do total=$((total+1)); done <<EOF
 $t
 EOF
-    if [ "$tl" = 1 ] && [ $total -gt $max ]; then start=$((total-max)); fi
+    if [ $total -gt $max ]; then
+        if [ "$tl" = 1 ]; then start=$((total-max-sc)); else start=$sc; fi
+        [ $start -lt 0 ] && start=0
+        [ $start -gt $((total-max)) ] && start=$((total-max))
+    fi
+    ET_TOTAL=$total; ET_START=$start; ET_MAX=$max
     while IFS= read -r l; do
         if [ $i -ge $start ] && [ $i -lt $((start+max)) ]; then
             if [ "$cur" = 1 ] && [ $i -eq $((total-1)) ]; then l="${l}_"; fi
@@ -81,11 +139,12 @@ EOF
     while [ $shown -lt $max ]; do crow $shown "" "$TXA"; shown=$((shown+1)); done
 }
 
-# emit_list <list> <sel> <top> <maxrows> <row0>   (sets LTOP)
+# emit_list <list> <sel> <top> <maxrows> <row0>   (sets LTOP, ET_*)
 emit_list() {
     local lst="$1" sel=$2 top=$3 max=$4 row0=$5 i=0 shown=0 l a
     [ $sel -lt $top ] && top=$sel
     [ $sel -ge $((top+max)) ] && top=$((sel-max+1))
+    [ $top -lt 0 ] && top=0
     LTOP=$top
     while IFS= read -r l; do
         if [ $i -ge $top ] && [ $i -lt $((top+max)) ]; then
@@ -97,7 +156,22 @@ emit_list() {
     done <<EOF
 $lst
 EOF
+    ET_TOTAL=$i; ET_START=$top; ET_MAX=$max
     while [ $shown -lt $max ]; do crow $((shown+row0)) "" "$BODY"; shown=$((shown+1)); done
+}
+
+# visible scrollbar on the window's right border (only if content overflows)
+draw_scroll() {  # row offset of first content row inside window = 1
+    local total=$ET_TOTAL start=$ET_START max=$ET_MAX tr r pos
+    [ $total -le $max ] && return
+    tr=$((H-4))
+    printf '\033[%d;%dH%s^' $((Y+1)) $((X+W-1)) "$BODY"
+    printf '\033[%d;%dHv' $((Y+H-2)) $((X+W-1))
+    [ $tr -lt 1 ] && return
+    r=1
+    while [ $r -le $tr ]; do printf '\033[%d;%dH:' $((Y+1+r)) $((X+W-1)); r=$((r+1)); done
+    pos=$(( start*(tr-1)/(total-max) ))
+    printf '\033[%d;%dH#' $((Y+2+pos)) $((X+W-1))
 }
 
 count_lines() { CNT=0; local l; while IFS= read -r l; do CNT=$((CNT+1)); done <<EOF
@@ -141,26 +215,46 @@ draw_content() {
     cgeom $1
     TXA="$BODY"
     case "$TYPE" in
-        note)   c_note $1 ;;
-        files)  c_files $1 ;;
-        term)   c_term $1 ;;
-        calc)   c_calc $1 ;;
-        info)   c_info $1 ;;
-        launch) c_launch $1 ;;
+        note)     c_note $1 ;;
+        files)    c_files $1 ;;
+        term)     c_term $1 ;;
+        calc)     c_calc $1 ;;
+        info)     c_info $1 ;;
+        launch)   c_launch $1 ;;
+        apps)     c_apps $1 ;;
+        settings) c_settings $1 ;;
+        ctx)      c_ctx $1 ;;
     esac
     printf '%s' "$RST"
 }
 
 draw_topbar() {
     local a m
-    if [ "$MODE" = wm ]; then
-        a="$WMA"
-        m=" WINDOW MODE | Arrows:move +/-:size Tab:next M:max X:close N:start Esc:back"
-    else
-        a="$TOPA"
-        m=" ClaudeDOS Desktop | Esc:window mode  ^N:start  ^X:close  | mouse: click/drag"
-    fi
+    case "$MODE" in
+        wm)
+            a="$WMA"
+            m=" WINDOW MODE | Arrows:move +/-:size Tab:next M:max X:close N:start D:icons Esc:back" ;;
+        icons)
+            a="$WMA"
+            m=" DESKTOP ICONS | Up/Down:select  Enter:open  Esc:back" ;;
+        *)
+            a="$TOPA"
+            m=" ClaudeDOS Desktop | Esc:window mode  ^N:start  ^X:close  | mouse works too" ;;
+    esac
     printf '\033[1;1H%s%-*.*s%s' "$a" $COLS $COLS "$m" "$RST"
+}
+
+ICON_LABELS="My Apps${NL}My Computer${NL}My Files"
+draw_icons() {
+    local i=0 l r a
+    while IFS= read -r l; do
+        r=$((3+i*2))
+        if [ $i -eq $ICON_SEL ]; then a="$SELA"; else a="$DESKA"; fi
+        printf '\033[%d;3H%s%s %-12s%s' $r "$a" "${ESC}[1m" "$l" "$RST"
+        i=$((i+1))
+    done <<EOF
+$ICON_LABELS
+EOF
 }
 
 draw_clock() {
@@ -188,10 +282,18 @@ do_redraw() {
     local i
     printf '%s%s%s' "${ESC}[?25l" "$DESKA" "${ESC}[2J"
     draw_topbar
+    draw_icons
     for i in $ORDER; do draw_window $i; draw_content $i; done
     draw_taskbar
 }
-redraw() { NOW=$(date +%H:%M); paint do_redraw; }
+
+# window rectangles for the pointer-shape logic in kbmouse
+write_wins() {
+    local i
+    : > /tmp/wins
+    for i in $ORDER; do geom $i; echo "$X $Y $W $H" >> /tmp/wins; done
+}
+redraw() { NOW=$(date +%H:%M); write_wins; paint do_redraw; }
 
 # ---------------------------------------------------------------
 #  window management
@@ -204,12 +306,12 @@ newwin() {  # type title w h
     NEWID=$NEXT; NEXT=$((NEXT+1))
     s $NEWID type "$1"; s $NEWID title "$2"; s $NEWID w "$3"; s $NEWID h "$4"
     n=$(( cnt % 6 ))
-    x=$((4+n*4)); y=$((3+n*2))
+    x=$((17+n*3)); y=$((3+n*2))
     [ $((x+$3)) -gt $COLS ] && x=$((COLS-$3))
     [ $x -lt 1 ] && x=1
     [ $((y+$4)) -gt $((ROWS-1)) ] && y=$((ROWS-1-$4))
     [ $y -lt 2 ] && y=2
-    s $NEWID x $x; s $NEWID y $y; s $NEWID max 0
+    s $NEWID x $x; s $NEWID y $y; s $NEWID max 0; s $NEWID scroll 0
     ORDER="$ORDER $NEWID"; FOCUS=$NEWID
     return 0
 }
@@ -230,7 +332,7 @@ raise_win() {
 }
 
 cycle_win() {
-    local first rest
+    local first
     set -- $ORDER
     [ $# -lt 2 ] && return
     first=$1; shift
@@ -262,6 +364,7 @@ resize_win() {  # dw dh
 
 toggle_max() {
     local id=$FOCUS m
+    [ -z "$id" ] && return
     g $id max m
     if [ "$m" = 1 ]; then
         g $id sx X; g $id sy Y; g $id sw W; g $id sh H
@@ -271,6 +374,17 @@ toggle_max() {
         s $id sx $X; s $id sy $Y; s $id sw $W; s $id sh $H
         s $id x 1; s $id y 2; s $id w $((COLS-1)); s $id h $((ROWS-3)); s $id max 1
     fi
+}
+
+close_popups() {  # [keep-id]  closes Start menu and right-click menus
+    local i T closed=""
+    for i in $ORDER; do
+        g $i type T
+        if { [ "$T" = launch ] || [ "$T" = ctx ]; } && [ "$i" != "$1" ]; then
+            close_win $i; closed=1
+        fi
+    done
+    [ -n "$closed" ] && ACT=full
 }
 
 # ---------------------------------------------------------------
@@ -288,9 +402,10 @@ open_note() {  # file
 }
 
 c_note() {
-    local B F M
-    g $1 buf B; g $1 file F; g $1 msg M
-    emit_text "$B" $((CH-1)) 1 1
+    local B F M SC
+    g $1 buf B; g $1 file F; g $1 msg M; g $1 scroll SC
+    emit_text "$B" $((CH-1)) 1 1 ${SC:-0}
+    draw_scroll
     crow $((CH-1)) " ^S Save  ^X Close  ${F##*/}${M}" "$STAT"
 }
 
@@ -311,8 +426,8 @@ k_note() {
         *) B="${B}${KEY}" ;;
     esac
     last=${B##*"$NL"}
-    if [ ${#last} -ge $((CW-2)) ]; then B="${B}${NL}"; fi
-    s $id buf "$B"; s $id msg "$M"
+    if [ ${#last} -ge $((CW-3)) ]; then B="${B}${NL}"; fi
+    s $id buf "$B"; s $id msg "$M"; s $id scroll 0
 }
 
 # ---------------------------------------------------------------
@@ -333,7 +448,8 @@ c_files() {
     crow 0 " $D" "$STAT"
     emit_list "$L" $SEL $TOP $((CH-2)) 1
     s $1 top $LTOP
-    crow $((CH-1)) " Enter:Open  Bksp:Up  ^X:Close" "$STAT"
+    draw_scroll
+    crow $((CH-1)) " Enter/dbl-click:Open  Bksp:Up  ^X:Close" "$STAT"
 }
 
 k_files() {
@@ -360,10 +476,11 @@ k_files() {
 #  TERMINAL (one command at a time; use the full-screen shell for more)
 # ---------------------------------------------------------------
 c_term() {
-    local O D IN
-    g $1 out O; g $1 dir D; g $1 in IN
+    local O D IN SC
+    g $1 out O; g $1 dir D; g $1 in IN; g $1 scroll SC
     TXA="$TERMA"
-    emit_text "$O" $((CH-1)) 1 0
+    emit_text "$O" $((CH-1)) 1 0 ${SC:-0}
+    draw_scroll
     crow $((CH-1)) "${D}> ${IN}_" "$TERMA"
 }
 
@@ -383,7 +500,10 @@ k_term() {
                     if [ -d "$nd" ]; then D=$(cd "$nd" && pwd); else O="${O}cd: no such directory${NL}"; fi ;;
                 clear) O="" ;;
                 exit) close_win $id; ACT=full; return ;;
-                *) res=$( (cd "$D" && eval "$cmd") 2>&1 </dev/null ); O="${O}${res}${NL}" ;;
+                *) busy_on
+                   res=$( (cd "$D" && eval "$cmd") 2>&1 </dev/null )
+                   busy_off
+                   O="${O}${res}${NL}" ;;
             esac
             O="$(printf '%s' "$O" | tail -n 200)${NL}" ;;
         "$K_BS"|"$K_BS2") IN=${IN%?} ;;
@@ -391,31 +511,32 @@ k_term() {
         *[[:cntrl:]]*) return ;;
         *) [ ${#IN} -lt $((CW-${#D}-4)) ] && IN="${IN}${KEY}" ;;
     esac
-    s $id out "$O"; s $id dir "$D"; s $id in "$IN"
+    s $id out "$O"; s $id dir "$D"; s $id in "$IN"; s $id scroll 0
 }
 
 # ---------------------------------------------------------------
-#  CALCULATOR
+#  CALCULATOR   (+ - * x / div mod and parentheses, whole numbers)
 # ---------------------------------------------------------------
 c_calc() {
     local H2 IN
     g $1 hist H2; g $1 in IN
-    emit_text "$H2" $((CH-2)) 1 0
+    emit_text "$H2" $((CH-2)) 1 0 0
     crow $((CH-2)) "" "$BODY"
     crow $((CH-1)) " > ${IN}_" "$STAT"
 }
 
 k_calc() {
-    local id=$1 H2 IN r
+    local id=$1 H2 IN r E
     cgeom $id
     g $id hist H2; g $id in IN
     case "$KEY" in
         "$K_ENTER")
-            case "$IN" in
+            E=$(printf '%s' "$IN" | sed 's/div/\//g; s/mod/%/g; s/x/*/g')
+            case "$E" in
                 "") ;;
                 *[!0-9+*/%\(\)" "-]*) H2="${H2} ${IN}${NL}    = invalid characters${NL}" ;;
                 *)
-                    if r=$( (echo $((IN))) 2>/dev/null ); then H2="${H2} ${IN}${NL}    = ${r}${NL}"
+                    if r=$( (echo $((E))) 2>/dev/null ); then H2="${H2} ${IN}${NL}    = ${r}${NL}"
                     else H2="${H2} ${IN}${NL}    = error${NL}"; fi ;;
             esac
             IN=""
@@ -429,50 +550,64 @@ k_calc() {
 }
 
 # ---------------------------------------------------------------
-#  INFO WINDOWS (System Info / About / Help)
+#  INFO WINDOWS (System Info / My Computer / About / Help)
 # ---------------------------------------------------------------
 c_info() {
-    local T
-    g $1 txt T
-    emit_text "$T" $((CH-1)) 0 0
-    crow $((CH-1)) " R:Refresh  ^X:Close" "$STAT"
+    local T SC
+    g $1 txt T; g $1 scroll SC
+    emit_text "$T" $((CH-1)) 0 0 ${SC:-0}
+    draw_scroll
+    crow $((CH-1)) " R:Refresh  Up/Down/wheel:Scroll  ^X:Close" "$STAT"
 }
 
 k_info() {
-    local B
+    local id=$1 B T SC max
+    cgeom $id
+    g $id txt T; g $id scroll SC
+    count_lines "$T"; max=$((CNT-(CH-1)))
     case "$KEY" in
-        r|R) g $1 builder B; $B; s $1 txt "$TXT" ;;
+        r|R) busy_on; g $id builder B; $B; busy_off; s $id txt "$TXT" ;;
+        UP)   [ ${SC:-0} -gt 0 ] && s $id scroll $((SC-1)) ;;
+        DOWN) [ ${SC:-0} -lt $max ] && s $id scroll $((SC+1)) ;;
     esac
 }
 
 open_info() {  # builder title w h
     newwin info "$2" $3 $4 || return
     s $NEWID builder "$1"
+    busy_on
     $1
+    busy_off
     s $NEWID txt "$TXT"
 }
 
 hostname_s() { HN=$(hostname 2>/dev/null); case "$HN" in ""|"(none)") HN=claudedos ;; esac; }
 
-build_sys() {
-    local up t a cpu cores
+sysbits() {
     hostname_s
-    up=$(cut -d. -f1 /proc/uptime 2>/dev/null); up=${up:-0}
-    t=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); t=${t:-0}
-    a=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); a=${a:-0}
-    cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//'); cpu=${cpu:-unknown}
-    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
-    TXT=" Host    : ${HN}${NL} Kernel  : $(uname -sr) ($(uname -m))${NL} Uptime  : $((up/3600))h $(((up%3600)/60))m $((up%60))s${NL} CPU     : ${cpu}${NL} Cores   : ${cores}${NL} Memory  : $(((t-a)/1024)) / $((t/1024)) MiB${NL} Screen  : ${COLS}x${ROWS} text${NL}${NL} Disks:${NL}$(df -h 2>/dev/null | head -5)"
+    UP=$(cut -d. -f1 /proc/uptime 2>/dev/null); UP=${UP:-0}
+    MT=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); MT=${MT:-0}
+    MA=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); MA=${MA:-0}
+    CPU=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//'); CPU=${CPU:-unknown}
+    CORES=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+}
+
+build_sys() {
+    sysbits
+    TXT=" Host    : ${HN}${NL} Kernel  : $(uname -sr) ($(uname -m))${NL} Uptime  : $((UP/3600))h $(((UP%3600)/60))m $((UP%60))s${NL} CPU     : ${CPU}${NL} Cores   : ${CORES}${NL} Memory  : $(((MT-MA)/1024)) / $((MT/1024)) MiB${NL} Screen  : ${COLS}x${ROWS} text${NL}${NL} Disks:${NL}$(df -h 2>/dev/null | head -5)"
+}
+
+build_mycomp() {
+    local drives
+    sysbits
+    drives=$(awk 'NR>2 && $4 ~ /^(sd|vd|hd|nvme|mmcblk|sr)/ { printf " %-14s %8d MB\n", $4, $3/1024 }' /proc/partitions 2>/dev/null)
+    [ -z "$drives" ] && drives=" (no drives detected)"
+    TXT=" Computer : ${HN}${NL} Processor : ${CPU} (${CORES})${NL} Memory   : $(((MT-MA)/1024)) / $((MT/1024)) MiB${NL} Kernel   : $(uname -sr)${NL} Uptime   : $((UP/3600))h $(((UP%3600)/60))m${NL}${NL} Drives:${NL}${drives}${NL}${NL} Mounted:${NL}$(df -h 2>/dev/null | head -6)"
 }
 
 build_about() {
-    local up t a cpu cores
-    hostname_s
-    up=$(cut -d. -f1 /proc/uptime 2>/dev/null); up=${up:-0}
-    t=$(grep MemTotal /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); t=${t:-0}
-    a=$(grep MemAvailable /proc/meminfo 2>/dev/null | cut -d: -f2 | tr -d ' kB'); a=${a:-0}
-    cpu=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//'); cpu=${cpu:-unknown}
-    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+    local L1 L2 L3 L4 L5 L6 L7 L8 L9
+    sysbits
     L1='   .--------------.   '
     L2='  /|              |\  '
     L3=' / |  ___________ | \ '
@@ -482,20 +617,21 @@ build_about() {
     L7='|__|_______________|__|'
     L8='   |_______________|   '
     L9='    \_____________/    '
-    TXT="${NL} ${L1}  root@${HN}${NL} ${L2}  ----------------${NL} ${L3}  OS:      ClaudeDOS Desktop${NL} ${L4}  Kernel:  $(uname -r)${NL} ${L5}  Uptime:  $((up/3600))h $(((up%3600)/60))m${NL} ${L6}  Shell:   busybox ash${NL} ${L7}  Init:    custom /init${NL} ${L8}  CPU:     ${cpu}${NL} ${L9}  Memory:  $(((t-a)/1024))/$((t/1024)) MiB (${cores} cpu)"
+    TXT="${NL} ${L1}  root@${HN}${NL} ${L2}  ----------------${NL} ${L3}  OS:      ClaudeDOS Desktop${NL} ${L4}  Kernel:  $(uname -r)${NL} ${L5}  Uptime:  $((UP/3600))h $(((UP%3600)/60))m${NL} ${L6}  Shell:   busybox ash${NL} ${L7}  Init:    custom /init${NL} ${L8}  CPU:     ${CPU}${NL} ${L9}  Memory:  $(((MT-MA)/1024))/$((MT/1024)) MiB (${CORES} cpu)"
 }
 
 build_help() {
-    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} ESC or Ctrl+W   window mode (red bar on top)${NL}   arrows   move the window${NL}   + / -    make it bigger / smaller${NL}   Tab      switch to the next window${NL}   M        maximize / restore${NL}   X        close the window${NL}   N        open the Start menu${NL}   ESC      back to the app${NL}${NL} Ctrl+N   Start menu    Ctrl+X   close window${NL} Ctrl+S   save (Notepad)${NL}${NL} MOUSE: click a window to focus it, drag${NL} its title bar to move, [=] maximize,${NL} [x] close, drag the bottom-right corner${NL} to resize, click the taskbar to switch."
+    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} KEYBOARD${NL} Ctrl+N  Start menu     Ctrl+X  close window${NL} Ctrl+S  save (Notepad)${NL} ESC / Ctrl+W  window mode (red bar):${NL}   arrows move, + / - resize, Tab next window,${NL}   M maximize, X close, N Start, D desktop icons${NL}${NL} MOUSE${NL} Click: focus.  Drag title bar: move.${NL} [=] maximize   [x] close   dbl-click title: max${NL} Drag right/bottom edge or corner: resize${NL} Right-click: context menu${NL} Double-click: open icons and files${NL} Wheel: scroll  (^ # v bar on the right edge)${NL}${NL} DESKTOP${NL} My Apps lists every app. My Computer shows${NL} hardware and drives. Settings changes the${NL} theme and timezone (reset on reboot).${NL}${NL} Calculator: + - * x / div mod ( )  e.g. 10div3"
 }
 
 # ---------------------------------------------------------------
 #  START MENU
 # ---------------------------------------------------------------
-LAUNCH_ITEMS="1  Notepad${NL}2  Files${NL}3  Terminal${NL}4  Calculator${NL}5  System Info${NL}6  About ClaudeDOS${NL}7  Help${NL}8  Full-screen Shell${NL}9  Shut Down${NL}0  Reboot"
+LAUNCH_ITEMS="1  Notepad${NL}2  Files${NL}3  Terminal${NL}4  Calculator${NL}5  My Apps${NL}6  My Computer${NL}7  Settings${NL}8  Full-screen Shell${NL}9  Shut Down${NL}0  Reboot"
+LAUNCH_NAMES="notepad files term calc apps mycomp settings fsshell shutdown reboot"
 
 open_launcher() {
-    local i
+    local i T
     for i in $ORDER; do
         g $i type T
         if [ "$T" = launch ]; then raise_win $i; return; fi
@@ -518,24 +654,170 @@ k_launch() {
     case "$KEY" in
         UP)   [ $sel -gt 0 ] && sel=$((sel-1)) ;;
         DOWN) [ $sel -lt 9 ] && sel=$((sel+1)) ;;
-        "$K_ENTER") close_win $id; launch $(( (sel+1) % 10 )); ACT=full; return ;;
-        [0-9]) close_win $id; launch $KEY; ACT=full; return ;;
+        "$K_ENTER") close_win $id; nth_word $sel $LAUNCH_NAMES; launch $NW; ACT=full; return ;;
+        [0-9]) close_win $id; nth_word $(( (KEY+9) % 10 )) $LAUNCH_NAMES; launch $NW; ACT=full; return ;;
     esac
     s $id sel $sel
 }
 
+# ---------------------------------------------------------------
+#  MY APPS
+# ---------------------------------------------------------------
+APPS_LIST="Notepad${NL}Files${NL}Terminal${NL}Calculator${NL}System Info${NL}About ClaudeDOS${NL}Help${NL}Settings${NL}My Computer${NL}Full-screen Shell"
+APPS_NAMES="notepad files term calc sys about help settings mycomp fsshell"
+
+open_apps() {
+    newwin apps "My Apps" 40 16 || return
+    s $NEWID sel 0; s $NEWID top 0; s $NEWID count 10
+}
+
+c_apps() {
+    local SEL TOP
+    g $1 sel SEL; g $1 top TOP
+    crow 0 " Double-click or Enter to open" "$STAT"
+    emit_list "$APPS_LIST" $SEL $TOP $((CH-2)) 1
+    s $1 top $LTOP
+    draw_scroll
+    crow $((CH-1)) " Up/Down  Enter:Open  ^X:Close" "$STAT"
+}
+
+apps_open() {  # id
+    local SEL
+    g $1 sel SEL
+    nth_word $SEL $APPS_NAMES
+    launch $NW
+    ACT=full
+}
+
+k_apps() {
+    local id=$1 SEL
+    g $id sel SEL
+    case "$KEY" in
+        UP)   [ $SEL -gt 0 ] && SEL=$((SEL-1)) ;;
+        DOWN) [ $SEL -lt 9 ] && SEL=$((SEL+1)) ;;
+        "$K_ENTER") apps_open $id; return ;;
+    esac
+    s $id sel $SEL
+}
+
+# ---------------------------------------------------------------
+#  SETTINGS
+# ---------------------------------------------------------------
+open_settings() {
+    newwin settings "Settings" 50 13 || return
+    s $NEWID sel 0
+}
+
+c_settings() {
+    local SEL r items
+    g $1 sel SEL
+    crow 0 " Click a row or press Enter to change it" "$STAT"
+    items="Theme:     ${THEME_LABEL}${NL}Timezone:  ${TZ_LABEL}"
+    emit_list "$items" $SEL 0 2 1
+    r=3
+    while [ $r -lt $((CH-1)) ]; do crow $r "" "$BODY"; r=$((r+1)); done
+    crow 4 " Left/Right: previous / next choice" "$BODY"
+    crow 6 " Settings live in RAM and reset on reboot." "$BODY"
+    crow $((CH-1)) " Up/Down  Enter  ^X:Close" "$STAT"
+}
+
+settings_change() {  # row delta
+    if [ $1 -eq 0 ]; then
+        THEME_IDX=$(( (THEME_IDX + $2 + 4) % 4 ))
+        nth_word $THEME_IDX $THEME_NAMES
+        apply_theme $NW
+    else
+        TZ_IDX=$(( (TZ_IDX + $2 + TZ_COUNT) % TZ_COUNT ))
+        set_tz $TZ_IDX
+    fi
+    ACT=full
+}
+
+k_settings() {
+    local id=$1 SEL
+    g $id sel SEL
+    case "$KEY" in
+        UP)   SEL=0 ;;
+        DOWN) SEL=1 ;;
+        "$K_ENTER"|RIGHT|" ") settings_change $SEL 1 ;;
+        LEFT) settings_change $SEL -1 ;;
+    esac
+    s $id sel $SEL
+}
+
+# ---------------------------------------------------------------
+#  RIGHT-CLICK MENU
+# ---------------------------------------------------------------
+open_ctx() {  # col row target
+    local c=$1 r=$2 tgt=$3 items names nit nx ny
+    if [ -n "$tgt" ]; then
+        items="Close window${NL}Maximize / Restore${NL}New Notepad${NL}Settings"
+        names="close${NL}max${NL}notepad${NL}settings"; nit=4
+    else
+        items="My Apps${NL}My Computer${NL}New Notepad${NL}Terminal${NL}Settings"
+        names="apps${NL}mycomp${NL}notepad${NL}term${NL}settings"; nit=5
+    fi
+    newwin ctx "Menu" 24 $((nit+2)) || return
+    s $NEWID items "$items"; s $NEWID names "$names"; s $NEWID tgt "$tgt"
+    s $NEWID sel 0; s $NEWID count $nit
+    nx=$c; ny=$r
+    [ $((nx+24)) -gt $COLS ] && nx=$((COLS-24))
+    [ $((ny+nit+2)) -gt $((ROWS-1)) ] && ny=$((ROWS-1-nit-2))
+    [ $nx -lt 1 ] && nx=1
+    [ $ny -lt 2 ] && ny=2
+    s $NEWID x $nx; s $NEWID y $ny
+}
+
+c_ctx() {
+    local SEL L
+    g $1 sel SEL; g $1 items L
+    emit_list "$L" $SEL 0 $CH 0
+}
+
+ctx_do() {  # id index
+    local id=$1 tgt act T NM
+    g $id tgt tgt
+    g $id names NM
+    nth_line "$NM" $2
+    act=$NTH
+    close_win $id
+    ACT=full
+    case "$act" in
+        close)    g "${tgt:-0}" type T; [ -n "$T" ] && close_win $tgt ;;
+        max)      g "${tgt:-0}" type T; [ -n "$T" ] && { raise_win $tgt; toggle_max; } ;;
+        *)        launch $act ;;
+    esac
+}
+
+k_ctx() {
+    local id=$1 sel cnt
+    g $id sel sel; g $id count cnt
+    case "$KEY" in
+        UP)   [ $sel -gt 0 ] && sel=$((sel-1)) ;;
+        DOWN) [ $sel -lt $((cnt-1)) ] && sel=$((sel+1)) ;;
+        "$K_ENTER") ctx_do $id $sel; return ;;
+    esac
+    s $id sel $sel
+}
+
+# ---------------------------------------------------------------
+#  launching things
+# ---------------------------------------------------------------
 launch() {
     case "$1" in
-        1) open_note /root/scratch.txt ;;
-        2) newwin files "Files" 46 16 && { s $NEWID dir /root; files_load $NEWID; } ;;
-        3) newwin term "Terminal" 62 16 && { s $NEWID dir /root; s $NEWID out "ClaudeDOS terminal. One command at a time.${NL}Try: ls, cat, ps, free, df, dmesg${NL}"; s $NEWID in ""; } ;;
-        4) newwin calc "Calculator" 38 13 && { s $NEWID hist " Type e.g. 12*(3+4) and press Enter${NL}"; s $NEWID in ""; } ;;
-        5) open_info build_sys "System Info" 58 16 ;;
-        6) open_info build_about "About ClaudeDOS" 62 15 ;;
-        7) open_info build_help "Help" 56 22 ;;
-        8) fs_shell ;;
-        9) shutdown_now ;;
-        0) reboot_now ;;
+        notepad)  open_note /root/scratch.txt ;;
+        files)    newwin files "Files" 46 16 && { s $NEWID dir /root; files_load $NEWID; } ;;
+        term)     newwin term "Terminal" 62 16 && { s $NEWID dir /root; s $NEWID out "ClaudeDOS terminal. One command at a time.${NL}Try: ls, cat, ps, free, df, dmesg${NL}"; s $NEWID in ""; } ;;
+        calc)     newwin calc "Calculator" 40 14 && { s $NEWID hist " Try: 12*(3+4)   10div3   7mod3${NL} Operators: + - * x / div mod ( )${NL} (whole numbers only)${NL}"; s $NEWID in ""; } ;;
+        sys)      open_info build_sys "System Info" 58 16 ;;
+        about)    open_info build_about "About ClaudeDOS" 62 15 ;;
+        help)     open_info build_help "Help" 56 22 ;;
+        mycomp)   open_info build_mycomp "My Computer" 62 18 ;;
+        apps)     open_apps ;;
+        settings) open_settings ;;
+        fsshell)  fs_shell ;;
+        shutdown) shutdown_now ;;
+        reboot)   reboot_now ;;
     esac
 }
 
@@ -583,7 +865,7 @@ read_key() {
                *) KEY=OTHER ;;
            esac ;;
         n) KEY="$VAL" ;;
-        d|u|g) KEY=MOUSE; MT="$EVT"; set -- $VAL; MC=$1; MR=$2 ;;
+        d|u|g|x|r|w) KEY=MOUSE; MT="$EVT"; set -- $VAL; MC=$1; MR=$2; MD=$3 ;;
     esac
 }
 
@@ -599,7 +881,25 @@ wm_key() {
         m|M)   [ -n "$FOCUS" ] && { toggle_max; ACT=full; } ;;
         x|X)   [ -n "$FOCUS" ] && { close_win $FOCUS; ACT=full; } ;;
         n|N)   open_launcher; MODE=app; ACT=full ;;
+        d|D)   MODE=icons; ICON_SEL=0; ACT=full ;;
         ESC|"$K_ENTER"|" ") MODE=app; ACT=top ;;
+    esac
+}
+
+open_icon() {  # index
+    case "$1" in
+        0) launch apps ;;
+        1) launch mycomp ;;
+        2) launch files ;;
+    esac
+}
+
+icons_key() {
+    case "$KEY" in
+        UP)    [ $ICON_SEL -gt 0 ] && ICON_SEL=$((ICON_SEL-1)); ACT=full ;;
+        DOWN)  [ $ICON_SEL -lt 2 ] && ICON_SEL=$((ICON_SEL+1)); ACT=full ;;
+        "$K_ENTER") open_icon $ICON_SEL; MODE=app; ICON_SEL=-1; ACT=full ;;
+        ESC|d|D) MODE=app; ICON_SEL=-1; ACT=full ;;
     esac
 }
 
@@ -607,12 +907,15 @@ app_key() {
     local T
     g $FOCUS type T
     case "$T" in
-        note)   k_note $FOCUS ;;
-        files)  k_files $FOCUS ;;
-        term)   k_term $FOCUS ;;
-        calc)   k_calc $FOCUS ;;
-        info)   k_info $FOCUS ;;
-        launch) k_launch $FOCUS ;;
+        note)     k_note $FOCUS ;;
+        files)    k_files $FOCUS ;;
+        term)     k_term $FOCUS ;;
+        calc)     k_calc $FOCUS ;;
+        info)     k_info $FOCUS ;;
+        launch)   k_launch $FOCUS ;;
+        apps)     k_apps $FOCUS ;;
+        settings) k_settings $FOCUS ;;
+        ctx)      k_ctx $FOCUS ;;
     esac
     [ -z "$ACT" ] && ACT=content
 }
@@ -640,32 +943,42 @@ win_at() {  # col row -> WHIT = topmost window under that cell
     done
 }
 
-close_launchers() {
-    local i T
-    for i in $ORDER; do
-        g $i type T
-        [ "$T" = launch ] && close_win $i
-    done
-}
-
-m_launch() {  # id col row
-    local rr=$(($3-CY)) d
-    if [ $rr -ge 1 ] && [ $rr -le 10 ]; then
-        d=$(( rr % 10 ))
-        close_win $1; launch $d; ACT=full
+icon_at() {  # col row -> ICONHIT = icon index, or empty
+    local idx
+    ICONHIT=""
+    if [ $2 -ge 3 ] && [ $(( ($2-3) % 2 )) -eq 0 ] && [ $1 -ge 3 ] && [ $1 -le 15 ]; then
+        idx=$(( ($2-3)/2 ))
+        [ $idx -lt 3 ] && ICONHIT=$idx
     fi
 }
 
-m_files() {  # id col row
+m_launch() {  # id col row
+    local rr=$(($3-CY))
+    if [ $rr -ge 1 ] && [ $rr -le 10 ]; then
+        close_win $1; nth_word $((rr-1)) $LAUNCH_NAMES; launch $NW; ACT=full
+    fi
+}
+
+m_list_select() {  # id col row  -> selects the clicked row of a files/apps list
     local rr=$(($3-CY)) SEL TOP CNT2 idx
     g $1 sel SEL; g $1 top TOP; g $1 count CNT2
     idx=$((rr-1+TOP))
+    LISTHIT=""
     if [ $rr -ge 1 ] && [ $rr -le $((CH-2)) ] && [ $idx -lt $CNT2 ]; then
-        if [ $idx -eq $SEL ]; then
-            KEY="$K_ENTER"; k_files $1; ACT=full
-        else
-            s $1 sel $idx; ACT=content
-        fi
+        s $1 sel $idx; LISTHIT=$idx; ACT=content
+    fi
+}
+
+m_ctx() {  # id col row
+    local rr=$(($3-CY)) cnt
+    g $1 count cnt
+    if [ $rr -ge 0 ] && [ $rr -lt $cnt ]; then ctx_do $1 $rr; fi
+}
+
+m_settings() {  # id col row
+    local rr=$(($3-CY))
+    if [ $rr -ge 1 ] && [ $rr -le 2 ]; then
+        s $1 sel $((rr-1)); settings_change $((rr-1)) 1
     fi
 }
 
@@ -673,6 +986,7 @@ mouse_down() {  # col row
     local c=$1 r=$2 i T st en m
     DRAGID=""
     if [ $r -eq $ROWS ]; then
+        close_popups 0
         if [ $c -le 10 ]; then open_launcher; MODE=app; ACT=full; return; fi
         i=1
         while [ $i -lt $NEXT ]; do
@@ -686,12 +1000,19 @@ mouse_down() {  # col row
         return
     fi
     win_at $c $r
-    [ -z "$WHIT" ] && return
+    if [ -z "$WHIT" ]; then
+        close_popups 0
+        icon_at $c $r
+        if [ -n "$ICONHIT" ]; then ICON_SEL=$ICONHIT; ACT=full
+        elif [ $ICON_SEL -ge 0 ]; then ICON_SEL=-1; ACT=full; fi
+        return
+    fi
     i=$WHIT
     g $i type T
-    if [ "$T" != launch ]; then close_launchers; fi
+    if [ "$T" != launch ] && [ "$T" != ctx ]; then close_popups 0; fi
+    if [ $ICON_SEL -ge 0 ]; then ICON_SEL=-1; ACT=full; fi
     if [ "$i" != "$FOCUS" ]; then raise_win $i; ACT=full; fi
-    if [ "$MODE" = wm ]; then MODE=app; ACT=full; fi
+    if [ "$MODE" != app ]; then MODE=app; ACT=full; fi
     geom $i
     if [ $r -eq $Y ]; then
         if [ $c -ge $((X+W-3)) ]; then
@@ -703,12 +1024,18 @@ mouse_down() {  # col row
             if [ "$m" != 1 ]; then DRAGID=$i; DRAGMODE=move; DRAGDX=$((c-X)); fi
         fi
     elif [ $r -eq $((Y+H-1)) ] && [ $c -eq $((X+W-1)) ]; then
-        DRAGID=$i; DRAGMODE=resize
+        DRAGID=$i; DRAGMODE=both
+    elif [ $c -eq $((X+W-1)) ]; then
+        DRAGID=$i; DRAGMODE=width
+    elif [ $r -eq $((Y+H-1)) ]; then
+        DRAGID=$i; DRAGMODE=height
     else
         cgeom $i
         case "$T" in
-            launch) m_launch $i $c $r ;;
-            files)  m_files $i $c $r ;;
+            launch)   m_launch $i $c $r ;;
+            ctx)      m_ctx $i $c $r ;;
+            files|apps) m_list_select $i $c $r ;;
+            settings) m_settings $i $c $r ;;
         esac
     fi
 }
@@ -727,7 +1054,9 @@ mouse_drag() {  # col row
         [ $ny -lt 2 ] && ny=2
         s $id x $nx; s $id y $ny
     else
-        nw=$(($1-X+1)); nh=$(($2-Y+1))
+        nw=$W; nh=$H
+        case "$DRAGMODE" in width|both) nw=$(($1-X+1)) ;; esac
+        case "$DRAGMODE" in height|both) nh=$(($2-Y+1)) ;; esac
         [ $nw -lt 26 ] && nw=26
         [ $nh -lt 8 ] && nh=8
         [ $((X+nw)) -gt $COLS ] && nw=$((COLS-X))
@@ -737,10 +1066,89 @@ mouse_drag() {  # col row
     ACT=full
 }
 
+mouse_dbl() {  # col row  (sent right after the matching press)
+    local c=$1 r=$2 i T
+    DRAGID=""
+    win_at $c $r
+    if [ -z "$WHIT" ]; then
+        icon_at $c $r
+        if [ -n "$ICONHIT" ]; then open_icon $ICONHIT; ICON_SEL=-1; ACT=full; fi
+        return
+    fi
+    i=$WHIT
+    g $i type T
+    geom $i; cgeom $i
+    if [ $r -eq $Y ]; then
+        if [ $c -lt $((X+W-6)) ]; then toggle_max; ACT=full; fi
+        return
+    fi
+    case "$T" in
+        files) m_list_select $i $c $r
+               if [ -n "$LISTHIT" ]; then KEY="$K_ENTER"; k_files $i; ACT=full; fi ;;
+        apps)  m_list_select $i $c $r
+               if [ -n "$LISTHIT" ]; then apps_open $i; fi ;;
+    esac
+}
+
+mouse_rclick() {  # col row
+    local c=$1 r=$2 tgt=""
+    DRAGID=""
+    close_popups 0
+    ACT=full
+    [ $r -eq $ROWS ] && return
+    [ $r -eq 1 ] && return
+    win_at $c $r
+    tgt=$WHIT
+    [ -n "$tgt" ] && raise_win $tgt
+    open_ctx $c $r "$tgt"
+}
+
+mouse_wheel() {  # col row dir(+1 down, -1 up)
+    local id T CNT2 TOP SEL max nt SC txt
+    win_at $1 $2
+    id=$WHIT
+    [ -z "$id" ] && return
+    g $id type T
+    cgeom $id
+    case "$T" in
+        files|apps)
+            g $id count CNT2; g $id top TOP; g $id sel SEL
+            max=$((CH-2))
+            nt=$((TOP+$3*3))
+            [ $nt -gt $((CNT2-max)) ] && nt=$((CNT2-max))
+            [ $nt -lt 0 ] && nt=0
+            s $id top $nt
+            [ $SEL -lt $nt ] && s $id sel $nt
+            [ $SEL -ge $((nt+max)) ] && s $id sel $((nt+max-1))
+            ;;
+        term|note)
+            if [ "$T" = term ]; then g $id out txt; else g $id buf txt; fi
+            count_lines "$txt"; max=$((CNT-(CH-1)))
+            g $id scroll SC; SC=${SC:-0}
+            nt=$((SC-$3*3))
+            [ $nt -gt $max ] && nt=$max
+            [ $nt -lt 0 ] && nt=0
+            s $id scroll $nt
+            ;;
+        info)
+            g $id txt txt
+            count_lines "$txt"; max=$((CNT-(CH-1)))
+            g $id scroll SC; SC=${SC:-0}
+            nt=$((SC+$3*3))
+            [ $nt -gt $max ] && nt=$max
+            [ $nt -lt 0 ] && nt=0
+            s $id scroll $nt
+            ;;
+        *) return ;;
+    esac
+    ACT=full
+}
+
 # ---------------------------------------------------------------
 #  main
 # ---------------------------------------------------------------
 mkdir -p /root /tmp
+rm -f /tmp/busy
 printf '%s[?7l' "$ESC"
 
 open_info build_help "Welcome" 56 22
@@ -755,19 +1163,24 @@ while :; do
             d) mouse_down $MC $MR ;;
             g) mouse_drag $MC $MR ;;
             u) DRAGID="" ;;
+            x) mouse_dbl $MC $MR ;;
+            r) mouse_rclick $MC $MR ;;
+            w) mouse_wheel $MC $MR $MD ;;
         esac
     elif [ "$KEY" = "$K_CN" ]; then
         open_launcher; MODE=app; ACT=full
     elif [ "$KEY" = "$K_CW" ]; then
-        if [ "$MODE" = wm ]; then MODE=app; else MODE=wm; fi
-        ACT=top
+        if [ "$MODE" = app ]; then MODE=wm; else MODE=app; ICON_SEL=-1; fi
+        ACT=full
     elif [ "$MODE" = wm ]; then
         wm_key
+    elif [ "$MODE" = icons ]; then
+        icons_key
     elif [ "$KEY" = "$K_CX" ]; then
         [ -n "$FOCUS" ] && { close_win $FOCUS; ACT=full; }
     elif [ "$KEY" = ESC ]; then
         g "${FOCUS:-0}" type T
-        if [ "$T" = launch ]; then close_win $FOCUS; ACT=full; else MODE=wm; ACT=top; fi
+        if [ "$T" = launch ] || [ "$T" = ctx ]; then close_win $FOCUS; ACT=full; else MODE=wm; ACT=top; fi
     elif [ -n "$FOCUS" ]; then
         app_key
     fi
