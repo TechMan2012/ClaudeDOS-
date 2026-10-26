@@ -224,6 +224,8 @@ draw_content() {
         apps)     c_apps $1 ;;
         settings) c_settings $1 ;;
         ctx)      c_ctx $1 ;;
+        pong)     c_pong $1 ;;
+        ttt)      c_ttt $1 ;;
     esac
     printf '%s' "$RST"
 }
@@ -621,14 +623,14 @@ build_about() {
 }
 
 build_help() {
-    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} KEYBOARD${NL} Ctrl+N  Start menu     Ctrl+X  close window${NL} Ctrl+S  save (Notepad)${NL} ESC / Ctrl+W  window mode (red bar):${NL}   arrows move, + / - resize, Tab next window,${NL}   M maximize, X close, N Start, D desktop icons${NL}${NL} MOUSE${NL} Click: focus.  Drag title bar: move.${NL} [=] maximize   [x] close   dbl-click title: max${NL} Drag right/bottom edge or corner: resize${NL} Right-click: context menu${NL} Double-click: open icons and files${NL} Wheel: scroll  (^ # v bar on the right edge)${NL}${NL} DESKTOP${NL} My Apps lists every app. My Computer shows${NL} hardware and drives. Settings changes the${NL} theme and timezone (reset on reboot).${NL}${NL} Calculator: + - * x / div mod ( )  e.g. 10div3"
+    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} KEYBOARD${NL} Ctrl+N  Start menu     Ctrl+X  close window${NL} Ctrl+S  save (Notepad)${NL} ESC / Ctrl+W  window mode (red bar):${NL}   arrows move, + / - resize, Tab next window,${NL}   M maximize, X close, N Start, D desktop icons${NL}${NL} MOUSE${NL} Click: focus.  Drag title bar: move.${NL} [=] maximize   [x] close   dbl-click title: max${NL} Drag right/bottom edge or corner: resize${NL} Right-click: context menu${NL} Double-click: open icons and files${NL} Wheel: scroll  (^ # v bar on the right edge)${NL}${NL} DESKTOP${NL} My Apps lists every app. My Computer shows${NL} hardware and drives. Settings changes the${NL} theme and timezone (reset on reboot).${NL}${NL} Calculator: + - * x / div mod ( )  e.g. 10div3${NL}${NL} GAMES (Start menu: P = Pong, T = Tic-Tac-Toe)${NL} Pong: mouse or W/S or Up/Down move, P pauses.${NL} Tic-Tac-Toe: click a square, or Enter / 1-9."
 }
 
 # ---------------------------------------------------------------
 #  START MENU
 # ---------------------------------------------------------------
-LAUNCH_ITEMS="1  Notepad${NL}2  Files${NL}3  Terminal${NL}4  Calculator${NL}5  My Apps${NL}6  My Computer${NL}7  Settings${NL}8  Full-screen Shell${NL}9  Shut Down${NL}0  Reboot"
-LAUNCH_NAMES="notepad files term calc apps mycomp settings fsshell shutdown reboot"
+LAUNCH_ITEMS="1  Notepad${NL}2  Files${NL}3  Terminal${NL}4  Calculator${NL}5  My Apps${NL}6  My Computer${NL}7  Settings${NL}8  Full-screen Shell${NL}9  Shut Down${NL}0  Reboot${NL}P  Pong${NL}T  Tic-Tac-Toe"
+LAUNCH_NAMES="notepad files term calc apps mycomp settings fsshell shutdown reboot pong ttt"
 
 open_launcher() {
     local i T
@@ -636,7 +638,7 @@ open_launcher() {
         g $i type T
         if [ "$T" = launch ]; then raise_win $i; return; fi
     done
-    newwin launch "Start" 30 14 || return
+    newwin launch "Start" 30 16 || return
     s $NEWID x 2; s $NEWID y 2; s $NEWID sel 0
 }
 
@@ -644,7 +646,7 @@ c_launch() {
     local SEL
     g $1 sel SEL
     crow 0 "" "$BODY"
-    emit_list "$LAUNCH_ITEMS" $SEL 0 10 1
+    emit_list "$LAUNCH_ITEMS" $SEL 0 12 1
     crow $((CH-1)) " Number or Enter. Esc=cancel" "$STAT"
 }
 
@@ -653,9 +655,11 @@ k_launch() {
     g $id sel sel
     case "$KEY" in
         UP)   [ $sel -gt 0 ] && sel=$((sel-1)) ;;
-        DOWN) [ $sel -lt 9 ] && sel=$((sel+1)) ;;
+        DOWN) [ $sel -lt 11 ] && sel=$((sel+1)) ;;
         "$K_ENTER") close_win $id; nth_word $sel $LAUNCH_NAMES; launch $NW; ACT=full; return ;;
         [0-9]) close_win $id; nth_word $(( (KEY+9) % 10 )) $LAUNCH_NAMES; launch $NW; ACT=full; return ;;
+        p|P) close_win $id; launch pong; ACT=full; return ;;
+        t|T) close_win $id; launch ttt; ACT=full; return ;;
     esac
     s $id sel $sel
 }
@@ -663,12 +667,12 @@ k_launch() {
 # ---------------------------------------------------------------
 #  MY APPS
 # ---------------------------------------------------------------
-APPS_LIST="Notepad${NL}Files${NL}Terminal${NL}Calculator${NL}System Info${NL}About ClaudeDOS${NL}Help${NL}Settings${NL}My Computer${NL}Full-screen Shell"
-APPS_NAMES="notepad files term calc sys about help settings mycomp fsshell"
+APPS_LIST="Notepad${NL}Files${NL}Terminal${NL}Calculator${NL}System Info${NL}About ClaudeDOS${NL}Help${NL}Settings${NL}My Computer${NL}Full-screen Shell${NL}Pong${NL}Tic-Tac-Toe"
+APPS_NAMES="notepad files term calc sys about help settings mycomp fsshell pong ttt"
 
 open_apps() {
     newwin apps "My Apps" 40 16 || return
-    s $NEWID sel 0; s $NEWID top 0; s $NEWID count 10
+    s $NEWID sel 0; s $NEWID top 0; s $NEWID count 12
 }
 
 c_apps() {
@@ -694,7 +698,7 @@ k_apps() {
     g $id sel SEL
     case "$KEY" in
         UP)   [ $SEL -gt 0 ] && SEL=$((SEL-1)) ;;
-        DOWN) [ $SEL -lt 9 ] && SEL=$((SEL+1)) ;;
+        DOWN) [ $SEL -lt 11 ] && SEL=$((SEL+1)) ;;
         "$K_ENTER") apps_open $id; return ;;
     esac
     s $id sel $SEL
@@ -815,6 +819,8 @@ launch() {
         mycomp)   open_info build_mycomp "My Computer" 62 18 ;;
         apps)     open_apps ;;
         settings) open_settings ;;
+        pong)     open_pong ;;
+        ttt)      open_ttt ;;
         fsshell)  fs_shell ;;
         shutdown) shutdown_now ;;
         reboot)   reboot_now ;;
@@ -865,6 +871,7 @@ read_key() {
                *) KEY=OTHER ;;
            esac ;;
         n) KEY="$VAL" ;;
+        f) KEY=FAST; set -- $VAL; MC=${1:-0}; MR=${2:-0} ;;
         d|u|g|x|r|w) KEY=MOUSE; MT="$EVT"; set -- $VAL; MC=$1; MR=$2; MD=$3 ;;
     esac
 }
@@ -916,6 +923,8 @@ app_key() {
         apps)     k_apps $FOCUS ;;
         settings) k_settings $FOCUS ;;
         ctx)      k_ctx $FOCUS ;;
+        pong)     k_pong $FOCUS ;;
+        ttt)      k_ttt $FOCUS ;;
     esac
     [ -z "$ACT" ] && ACT=content
 }
@@ -925,6 +934,421 @@ tick() {
     n=$(date +%H:%M)
     if [ "$n" != "$NOW" ]; then NOW=$n; paint draw_clock; fi
 }
+
+# ---------------------------------------------------------------
+#  GAMES: Pong and Tic-Tac-Toe
+# ---------------------------------------------------------------
+SEED=$(( $(date +%s) % 90000 + 12345 ))
+rnd() { SEED=$(( (SEED*1103515245 + 12345) & 2147483647 )); RV=$(( (SEED>>16) % $1 )); }
+
+PADCH="█"
+BALLCH="○"
+PGA="${ESC}[0;37;40m"      # court: grey on black
+PGP="${ESC}[1;37;40m"      # paddles: bright white
+PGB="${ESC}[1;33;40m"      # ball: bright yellow
+
+PG_ID=""; PG_ST=menu; PG_MODE=1; PG_DIFF=2
+PG_L=0; PG_R=0; PG_X=0; PG_Y=0; PG_VX=1; PG_VY=1; PG_VP=2; PG_T=0
+PG_WIN=7; PG_S1=0; PG_S2=0; PG_WAIT=0; PG_ERR=0; PG_LMC=0; PG_LMR=0
+PCW=40; PCH=14; PPH=3
+FASTON=0
+rm -f /tmp/fast
+
+# ask kbmouse for 10 events/second only while a Pong game is being played
+fast_sync() {
+    local want=0 T
+    if [ "$MODE" = app ] && [ -n "$FOCUS" ] && [ "$FOCUS" = "$PG_ID" ] && [ "$PG_ST" = play ]; then
+        g $FOCUS type T
+        [ "$T" = pong ] && want=1
+    fi
+    if [ $want -eq 1 ] && [ $FASTON -eq 0 ]; then : > /tmp/fast; FASTON=1
+    elif [ $want -eq 0 ] && [ $FASTON -eq 1 ]; then rm -f /tmp/fast; FASTON=0
+    fi
+}
+
+pg_dims() {   # after cgeom
+    PCW=$CW; PCH=$((CH-2))
+    PPH=3; [ $PCH -ge 14 ] && PPH=4
+    [ $PPH -gt $PCH ] && PPH=$PCH
+    [ $PG_L -gt $((PCH-PPH)) ] && PG_L=$((PCH-PPH))
+    [ $PG_L -lt 0 ] && PG_L=0
+    [ $PG_R -gt $((PCH-PPH)) ] && PG_R=$((PCH-PPH))
+    [ $PG_R -lt 0 ] && PG_R=0
+    [ $PG_X -ge $((PCW-1)) ] && PG_X=$((PCW-2))
+    [ $PG_Y -ge $PCH ] && PG_Y=$((PCH-1))
+    return 0
+}
+
+# court cell output (appended to OUT): col row attr glyph
+pg_cell() { OUT="${OUT}${ESC}[$((CY+1+$2));$((CX+$1))H$3$4"; }
+pg_erase() {
+    if [ $1 -eq $((PCW/2)) ] && [ $(($2 % 2)) -eq 0 ]; then pg_cell $1 $2 "$PGA" ":"
+    else pg_cell $1 $2 "$PGA" " "; fi
+}
+pg_draw_pad() { local i=0; while [ $i -lt $PPH ]; do pg_cell $1 $(($2+i)) "$PGP" "$PADCH"; i=$((i+1)); done; }
+pg_clr_pad()  { local i=0; while [ $i -lt $PPH ]; do pg_erase $1 $(($2+i)); i=$((i+1)); done; }
+
+pg_newerr() {   # how far off the computer aims at the next return
+    local q sg e=$((PPH/2+1))
+    rnd 10; q=$RV
+    rnd 2; sg=$((RV*2-1))
+    case $PG_DIFF in
+        1) rnd $((e*2+1)); PG_ERR=$((RV-e)) ;;
+        2) if [ $q -lt 3 ]; then PG_ERR=$((e*sg)); else PG_ERR=0; fi ;;
+        *) if [ $q -lt 1 ]; then PG_ERR=$((e*sg)); else PG_ERR=0; fi ;;
+    esac
+}
+
+pg_serve() {   # direction
+    PG_X=$((PCW/2)); PG_Y=$((PCH/2))
+    rnd 2; PG_VY=$((RV*2-1))
+    PG_VX=$1; PG_VP=2; PG_WAIT=12; PG_T=0
+    pg_newerr
+}
+
+pg_start() {
+    cgeom $PG_ID; pg_dims
+    PG_S1=0; PG_S2=0
+    PG_L=$(( (PCH-PPH)/2 )); PG_R=$PG_L
+    rnd 2; pg_serve $((RV*2-1))
+    PG_ST=play; PG_LMC=0; ACT=content
+}
+
+pg_angle() {   # where on the paddle the ball hit (0 = top edge)
+    if [ $1 -le 0 ]; then PG_VY=-1; PG_VP=1
+    elif [ $1 -ge $((PPH-1)) ]; then PG_VY=1; PG_VP=1
+    else PG_VP=2; fi
+}
+
+pg_point() {   # 1 = left scores, 2 = right scores
+    if [ $1 -eq 1 ]; then PG_S1=$((PG_S1+1)); else PG_S2=$((PG_S2+1)); fi
+    if [ $PG_S1 -ge $PG_WIN ] || [ $PG_S2 -ge $PG_WIN ]; then PG_ST=over
+    elif [ $1 -eq 1 ]; then pg_serve 1
+    else pg_serve -1; fi
+    paint draw_content $PG_ID
+}
+
+pg_nudge() {   # L|R delta
+    local v
+    if [ $1 = L ]; then v=$((PG_L+$2)); else v=$((PG_R+$2)); fi
+    [ $v -gt $((PCH-PPH)) ] && v=$((PCH-PPH))
+    [ $v -lt 0 ] && v=0
+    if [ $1 = L ]; then PG_L=$v; else PG_R=$v; fi
+}
+
+c_pong() {
+    local n1 n2 r m x
+    pg_dims
+    if [ "$PG_ST" = menu ]; then
+        emit_text "${NL}      P   O   N   G${NL}${NL}  1  Player vs Computer - Easy${NL}  2  Player vs Computer - Medium${NL}  3  Player vs Computer - Hard${NL}  4  Two players${NL}${NL}  Move: mouse, W/S or Up/Down.${NL}  Two players: mouse or W/S = left,${NL}  Up/Down = right.${NL}  First to 7 wins.  P = pause." $CH 0 0 0
+        return
+    fi
+    n1=You; n2=CPU
+    [ $PG_MODE -eq 2 ] && { n1=P1; n2=P2; }
+    crow 0 " $n1 $PG_S1    :    $PG_S2 $n2" "$STAT"
+    r=0
+    while [ $r -lt $PCH ]; do crow $((r+1)) "" "$PGA"; r=$((r+1)); done
+    OUT=""
+    r=0
+    while [ $r -lt $PCH ]; do
+        [ $((r % 2)) -eq 0 ] && pg_cell $((PCW/2)) $r "$PGA" ":"
+        r=$((r+1))
+    done
+    pg_draw_pad 1 $PG_L
+    pg_draw_pad $((PCW-2)) $PG_R
+    pg_cell $PG_X $PG_Y "$PGB" "$BALLCH"
+    m=""
+    case "$PG_ST" in
+        pause) m=" PAUSED - press P " ;;
+        over)
+            if [ $PG_S1 -gt $PG_S2 ]; then m=" $n1 wins!  Enter = menu "; else m=" $n2 wins!  Enter = menu "; fi ;;
+    esac
+    if [ -n "$m" ]; then
+        x=$(( (PCW-${#m})/2 )); [ $x -lt 0 ] && x=0
+        pg_cell $x $((PCH/2)) "$SELA" "$m"
+    fi
+    printf '%s' "$OUT"
+    crow $((CH-1)) " W/S Up/Dn mouse:move  P:pause  R:menu" "$STAT"
+}
+
+k_pong() {
+    local id=$1
+    cgeom $id; pg_dims
+    case "$PG_ST" in
+        menu)
+            case "$KEY" in
+                1|2|3) PG_MODE=1; PG_DIFF=$KEY; pg_start ;;
+                4) PG_MODE=2; pg_start ;;
+                "$K_ENTER") pg_start ;;
+            esac ;;
+        over)
+            case "$KEY" in "$K_ENTER"|r|R|" ") PG_ST=menu ;; esac ;;
+        *)
+            case "$KEY" in
+                p|P) if [ "$PG_ST" = play ]; then PG_ST=pause; else PG_ST=play; fi ;;
+                r|R) PG_ST=menu ;;
+                w|W) pg_nudge L -2 ;;
+                s|S) pg_nudge L 2 ;;
+                UP)   if [ $PG_MODE -eq 2 ]; then pg_nudge R -2; else pg_nudge L -2; fi ;;
+                DOWN) if [ $PG_MODE -eq 2 ]; then pg_nudge R 2; else pg_nudge L 2; fi ;;
+            esac ;;
+    esac
+}
+
+m_pong() {   # id col row   (cgeom already done)
+    local rr=$(($3-CY))
+    case "$PG_ST" in
+        menu)
+            case $rr in
+                3|4|5) PG_MODE=1; PG_DIFF=$((rr-2)); pg_start ;;
+                6) PG_MODE=2; pg_start ;;
+            esac ;;
+        over) PG_ST=menu; ACT=content ;;
+        pause) PG_ST=play; ACT=content ;;
+    esac
+}
+
+# runs on every fast tick (about 10 per second) while a Pong game is on top
+game_tick() {
+    local T div tgt nl NX OX OY
+    [ -n "$PG_ID" ] && [ "$PG_ST" = play ] && [ "$MODE" = app ] && [ "$FOCUS" = "$PG_ID" ] || return
+    g $PG_ID type T
+    [ "$T" = pong ] || return
+    cgeom $PG_ID; pg_dims
+    OUT=""
+    # the mouse (or pen) drives the left paddle
+    if [ "${MC:-0}" -gt 0 ] && { [ "$MC" != "$PG_LMC" ] || [ "$MR" != "$PG_LMR" ]; }; then
+        PG_LMC=$MC; PG_LMR=$MR
+        nl=$((MR-CY-1-PPH/2))
+        [ $nl -lt 0 ] && nl=0
+        [ $nl -gt $((PCH-PPH)) ] && nl=$((PCH-PPH))
+        if [ $nl -ne $PG_L ]; then pg_clr_pad 1 $PG_L; PG_L=$nl; pg_draw_pad 1 $PG_L; fi
+    fi
+    PG_T=$((PG_T+1))
+    if [ $PG_WAIT -gt 0 ]; then
+        PG_WAIT=$((PG_WAIT-1))
+    else
+        OX=$PG_X; OY=$PG_Y
+        # computer paddle
+        if [ $PG_MODE -eq 1 ] && [ $PG_VX -gt 0 ]; then
+            case $PG_DIFF in 1) div=4 ;; 2) div=2 ;; *) div=1 ;; esac
+            if [ $((PG_T % div)) -eq 0 ]; then
+                tgt=$((PG_Y+PG_ERR-PPH/2))
+                [ $tgt -lt 0 ] && tgt=0
+                [ $tgt -gt $((PCH-PPH)) ] && tgt=$((PCH-PPH))
+                nl=$PG_R
+                [ $PG_R -lt $tgt ] && nl=$((PG_R+1))
+                [ $PG_R -gt $tgt ] && nl=$((PG_R-1))
+                if [ $nl -ne $PG_R ]; then pg_clr_pad $((PCW-2)) $PG_R; PG_R=$nl; pg_draw_pad $((PCW-2)) $PG_R; fi
+            fi
+        fi
+        # vertical movement (every VP ticks) and wall bounce
+        if [ $((PG_T % PG_VP)) -eq 0 ]; then
+            PG_Y=$((PG_Y+PG_VY))
+            if [ $PG_Y -lt 0 ]; then PG_Y=1; PG_VY=1
+            elif [ $PG_Y -ge $PCH ]; then PG_Y=$((PCH-2)); PG_VY=-1; fi
+            [ $PG_Y -lt 0 ] && PG_Y=0
+        fi
+        # horizontal movement, paddle hits and misses
+        NX=$((PG_X+PG_VX))
+        if [ $PG_VX -lt 0 ] && [ $NX -le 2 ] && [ $PG_X -gt 2 ]; then
+            if [ $PG_Y -ge $PG_L ] && [ $PG_Y -lt $((PG_L+PPH)) ]; then
+                PG_VX=1; NX=2; pg_angle $((PG_Y-PG_L)); pg_newerr
+            fi
+        elif [ $PG_VX -gt 0 ] && [ $NX -ge $((PCW-3)) ] && [ $PG_X -lt $((PCW-3)) ]; then
+            if [ $PG_Y -ge $PG_R ] && [ $PG_Y -lt $((PG_R+PPH)) ]; then
+                PG_VX=-1; NX=$((PCW-3)); pg_angle $((PG_Y-PG_R))
+            fi
+        fi
+        if [ $NX -le 0 ]; then pg_point 2; return; fi
+        if [ $NX -ge $((PCW-1)) ]; then pg_point 1; return; fi
+        PG_X=$NX
+        pg_erase $OX $OY
+        pg_cell $PG_X $PG_Y "$PGB" "$BALLCH"
+        if [ $PG_X -le 3 ] || [ $PG_X -ge $((PCW-4)) ] || [ $OX -le 3 ] || [ $OX -ge $((PCW-4)) ]; then
+            pg_draw_pad 1 $PG_L; pg_draw_pad $((PCW-2)) $PG_R
+        fi
+    fi
+    [ -n "$OUT" ] && printf '%s' "$OUT"
+    return 0
+}
+
+open_pong() {
+    local T
+    if [ -n "$PG_ID" ]; then
+        g $PG_ID type T
+        if [ "$T" = pong ]; then raise_win $PG_ID; return; fi
+    fi
+    newwin pong "Pong" 46 18 || return
+    PG_ID=$NEWID; PG_ST=menu
+}
+
+# ---- Tic-Tac-Toe ----
+TT_CUR=4; TT_W=0; TT_L=0; TT_D=0; TT_OVER=0; TT_ID=""; TTR=""; TTM=""
+TT_MSG="Your move (you are X)"
+TT_SEP="-------+-------+-------"
+TT_BLK="       |       |       "
+TT_LINES="0 1 2 3 4 5 6 7 8 0 3 6 1 4 7 2 5 8 0 4 8 2 4 6"
+
+tt_new() {
+    local i=0
+    while [ $i -lt 9 ]; do eval "TT_$i=."; i=$((i+1)); done
+    TT_OVER=0; TT_MSG="Your move (you are X)"
+}
+
+tt_win() {   # TTR = x, o, d (draw) or empty
+    local va vb vc i
+    TTR=""
+    set -- $TT_LINES
+    while [ $# -ge 3 ]; do
+        eval "va=\$TT_$1; vb=\$TT_$2; vc=\$TT_$3"
+        if [ "$va" != . ] && [ "$va" = "$vb" ] && [ "$vb" = "$vc" ]; then TTR=$va; return 0; fi
+        shift 3
+    done
+    i=0
+    while [ $i -lt 9 ]; do
+        eval "va=\$TT_$i"
+        [ "$va" = . ] && return 0
+        i=$((i+1))
+    done
+    TTR=d
+}
+
+tt_two() {   # $1 = mark; TTM = empty cell that completes two in a row
+    local m=$1 va vb vc n e
+    TTM=""
+    set -- $TT_LINES
+    while [ $# -ge 3 ]; do
+        eval "va=\$TT_$1; vb=\$TT_$2; vc=\$TT_$3"
+        n=0; e=""
+        if [ "$va" = $m ]; then n=$((n+1)); elif [ "$va" = . ]; then e=$1; fi
+        if [ "$vb" = $m ]; then n=$((n+1)); elif [ "$vb" = . ]; then e=$2; fi
+        if [ "$vc" = $m ]; then n=$((n+1)); elif [ "$vc" = . ]; then e=$3; fi
+        if [ $n -eq 2 ] && [ -n "$e" ]; then TTM=$e; return 0; fi
+        shift 3
+    done
+}
+
+tt_cpu() {
+    local lst i v n k
+    tt_two o; if [ -n "$TTM" ]; then eval "TT_$TTM=o"; return 0; fi
+    tt_two x; if [ -n "$TTM" ]; then eval "TT_$TTM=o"; return 0; fi
+    if [ "$TT_4" = . ]; then TT_4=o; return 0; fi
+    for lst in "0 2 6 8" "1 3 5 7"; do
+        n=0
+        for i in $lst; do eval "v=\$TT_$i"; [ "$v" = . ] && n=$((n+1)); done
+        if [ $n -gt 0 ]; then
+            rnd $n; k=$RV
+            for i in $lst; do
+                eval "v=\$TT_$i"
+                if [ "$v" = . ]; then
+                    if [ $k -eq 0 ]; then eval "TT_$i=o"; return 0; fi
+                    k=$((k-1))
+                fi
+            done
+        fi
+    done
+}
+
+tt_finish() {
+    TT_OVER=1
+    case "$TTR" in
+        x) TT_W=$((TT_W+1)); TT_MSG="You win!  Click or press a key to play again" ;;
+        o) TT_L=$((TT_L+1)); TT_MSG="CPU wins.  Click or press a key to play again" ;;
+        d) TT_D=$((TT_D+1)); TT_MSG="Draw.  Click or press a key to play again" ;;
+    esac
+}
+
+tt_place() {   # player puts X in cell $1
+    local v
+    if [ $TT_OVER -eq 1 ]; then tt_new; return 0; fi
+    eval "v=\$TT_$1"
+    [ "$v" = . ] || return 0
+    eval "TT_$1=x"
+    tt_win; if [ -n "$TTR" ]; then tt_finish; return 0; fi
+    tt_cpu
+    tt_win; if [ -n "$TTR" ]; then tt_finish; return 0; fi
+    TT_MSG="Your move"
+}
+
+c_ttt() {
+    local i=0 y bc cx cy cv a col A0 A1 A2 ln n
+    if [ $CH -lt 14 ] || [ $CW -lt 24 ]; then
+        emit_text "${NL} Window too small for Tic-Tac-Toe.${NL} Drag the corner to make it bigger." $CH 0 0 0
+        return
+    fi
+    bc=$(( (CW-23)/2 ))
+    crow 0 " You (X): $TT_W   CPU (O): $TT_L   Draws: $TT_D" "$STAT"
+    y=1
+    while [ $y -lt $((CH-1)) ]; do crow $y "" "$BODY"; y=$((y+1)); done
+    y=0
+    while [ $y -le 10 ]; do
+        if [ $((y % 4)) -eq 3 ]; then ln="$TT_SEP"; else ln="$TT_BLK"; fi
+        printf '\033[%d;%dH%s%s' $((CY+1+y)) $((CX+bc)) "$BODY" "$ln"
+        y=$((y+1))
+    done
+    while [ $i -lt 9 ]; do
+        cx=$((i % 3)); cy=$((i / 3))
+        eval "cv=\$TT_$i"
+        col=""
+        if [ $i -eq $TT_CUR ] && [ $TT_OVER -eq 0 ]; then a="$SELA"; else a="$BODY"; fi
+        n=$((i+1))
+        case "$cv" in
+            x) A0='  \ /  '; A1='   X   '; A2='  / \  '; [ "$a" = "$BODY" ] && col="${ESC}[1;31m" ;;
+            o) A0=' .---. '; A1=' |   | '; A2=" '---' "; [ "$a" = "$BODY" ] && col="${ESC}[1;34m" ;;
+            *) A0='       '; A1="   $n   "; A2='       ' ;;
+        esac
+        printf '\033[%d;%dH%s%s%s' $((CY+1+cy*4))   $((CX+bc+cx*8)) "$a" "$col" "$A0"
+        printf '\033[%d;%dH%s%s%s' $((CY+2+cy*4))   $((CX+bc+cx*8)) "$a" "$col" "$A1"
+        printf '\033[%d;%dH%s%s%s' $((CY+3+cy*4))   $((CX+bc+cx*8)) "$a" "$col" "$A2"
+        i=$((i+1))
+    done
+    crow $((CH-2)) " $TT_MSG" "$BODY"
+    crow $((CH-1)) " Click/Enter/1-9: place  N:new game" "$STAT"
+}
+
+k_ttt() {
+    local id=$1
+    if [ $TT_OVER -eq 1 ]; then
+        case "$KEY" in UP|DOWN|LEFT|RIGHT|ESC|OTHER|DEL) return ;; esac
+        tt_new; return
+    fi
+    case "$KEY" in
+        UP)    [ $TT_CUR -ge 3 ] && TT_CUR=$((TT_CUR-3)) ;;
+        DOWN)  [ $TT_CUR -lt 6 ] && TT_CUR=$((TT_CUR+3)) ;;
+        LEFT)  [ $((TT_CUR % 3)) -gt 0 ] && TT_CUR=$((TT_CUR-1)) ;;
+        RIGHT) [ $((TT_CUR % 3)) -lt 2 ] && TT_CUR=$((TT_CUR+1)) ;;
+        "$K_ENTER"|" ") tt_place $TT_CUR ;;
+        [1-9]) TT_CUR=$((KEY-1)); tt_place $TT_CUR ;;
+        n|N) tt_new ;;
+    esac
+    return 0
+}
+
+m_ttt() {   # id col row   (cgeom already done)
+    local x y bc
+    if [ $TT_OVER -eq 1 ]; then tt_new; ACT=content; return; fi
+    bc=$(( (CW-23)/2 ))
+    x=$(($2-CX-bc)); y=$(($3-CY-1))
+    [ $x -ge 0 ] && [ $x -le 22 ] && [ $y -ge 0 ] && [ $y -le 10 ] || return 0
+    [ $((x % 8)) -eq 7 ] && return 0
+    [ $((y % 4)) -eq 3 ] && return 0
+    TT_CUR=$(( (y/4)*3 + x/8 ))
+    tt_place $TT_CUR
+    ACT=content
+}
+
+open_ttt() {
+    local T
+    if [ -n "$TT_ID" ]; then
+        g $TT_ID type T
+        if [ "$T" = ttt ]; then raise_win $TT_ID; return; fi
+    fi
+    newwin ttt "Tic-Tac-Toe" 40 16 || return
+    TT_ID=$NEWID
+    tt_new
+}
+tt_new
 
 # ---------------------------------------------------------------
 #  MOUSE
@@ -954,7 +1378,7 @@ icon_at() {  # col row -> ICONHIT = icon index, or empty
 
 m_launch() {  # id col row
     local rr=$(($3-CY))
-    if [ $rr -ge 1 ] && [ $rr -le 10 ]; then
+    if [ $rr -ge 1 ] && [ $rr -le 12 ]; then
         close_win $1; nth_word $((rr-1)) $LAUNCH_NAMES; launch $NW; ACT=full
     fi
 }
@@ -1036,6 +1460,8 @@ mouse_down() {  # col row
             ctx)      m_ctx $i $c $r ;;
             files|apps) m_list_select $i $c $r ;;
             settings) m_settings $i $c $r ;;
+            pong)     m_pong $i $c $r ;;
+            ttt)      m_ttt $i $c $r ;;
         esac
     fi
 }
@@ -1167,6 +1593,8 @@ while :; do
             r) mouse_rclick $MC $MR ;;
             w) mouse_wheel $MC $MR $MD ;;
         esac
+    elif [ "$KEY" = FAST ]; then
+        game_tick
     elif [ "$KEY" = "$K_CN" ]; then
         open_launcher; MODE=app; ACT=full
     elif [ "$KEY" = "$K_CW" ]; then
@@ -1189,4 +1617,5 @@ while :; do
         content) [ -n "$FOCUS" ] && paint draw_content $FOCUS ;;
         top)     paint draw_topbar ;;
     esac
+    fast_sync
 done

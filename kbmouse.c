@@ -444,7 +444,7 @@ static void on_term(int s) { (void)s; want_quit = 1; }
 int main(void)
 {
     struct pollfd fds[3 + MAXTAB];
-    long t_tick, t_ptr, t_mopen, t_scan;
+    long t_tick, t_ptr, t_mopen, t_scan, t_fast = 0;
     uint8_t hdr[4];
     FILE *pf;
 
@@ -525,6 +525,11 @@ int main(void)
             last_drag = now;
         }
         if (now - t_tick >= 1000) { emit("t\n"); t_tick = now; }
+        /* fast tick for games: only while the desktop keeps /tmp/fast around */
+        if (now - t_fast >= 100 && access("/tmp/fast", F_OK) == 0) {
+            emit("f%d %d\n", mactive ? mcol + 1 : 0, mactive ? mrow + 1 : 0);
+            t_fast = now;
+        }
         if (mactive && now - t_ptr >= 100) { pointer_refresh(mcol, mrow); t_ptr = now; }
         if (mfd < 0 && now - t_mopen >= 2000) { mouse_open(); t_mopen = now; }
         if (now - t_scan >= 3000) { tablet_scan(); t_scan = now; }

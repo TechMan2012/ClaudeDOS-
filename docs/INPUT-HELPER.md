@@ -32,6 +32,7 @@ One line per event on stdout:
 | `g<col> <row> 1` | moved while held (rate-limited to ~14/s) |
 | `u<col> <row> 1` | left button up |
 | `t` | one-second tick (drives the clock) |
+| `f<col> <row>` | fast tick, ~10/s, only while the desktop keeps `/tmp/fast` present (Pong). Carries the pointer cell, `0 0` if no pointer yet |
 
 Escape sequences are parsed in C with a 40ms timeout, so a lone `Esc` is
 distinguishable from the start of an arrow key. That is the thing the shell

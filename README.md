@@ -26,7 +26,7 @@ moved, resized, maximized and closed with the keyboard **or the mouse**.
 ## Apps
 
 Desktop icons (My Apps, My Computer, My Files), Settings (themes, timezone; reset on reboot), Notepad, Files (click or arrow through directories, open files in Notepad),
-Terminal (one command at a time), Calculator (`+ - x * / div mod`), System Info, About (neofetch
+Games (Pong, Tic-Tac-Toe), Terminal (one command at a time), Calculator (`+ - x * / div mod`), System Info, About (neofetch
 style, live data from `/proc`), Help, and a full-screen real shell for
 anything interactive. Start menu = `Ctrl+N` or click **Start**.
 
