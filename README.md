@@ -1,5 +1,11 @@
 # ClaudeDOS
 
+> **Experimental / beta.** ClaudeDOS is an experimental project, built mainly to
+> demonstrate what modern AI can do, and also as a novelty OS for breathing a
+> little life into old laptops. Expect rough edges. It is not a daily-driver
+> operating system and has no networking or saved storage, so don't rely on it for
+> anything important.
+
 A bare-bones bootable OS with a **windowed text-mode desktop**: a stock Linux
 kernel, a BusyBox userland, ~300 lines of C for input, and a POSIX `sh` script
 that draws everything. No systemd, no X11, no GNU coreutils. ~28MB, boots on
