@@ -224,6 +224,7 @@ draw_content() {
         apps)     c_apps $1 ;;
         settings) c_settings $1 ;;
         ctx)      c_ctx $1 ;;
+        games)    c_games $1 ;;
         pong)     c_pong $1 ;;
         ttt)      c_ttt $1 ;;
     esac
@@ -241,12 +242,12 @@ draw_topbar() {
             m=" DESKTOP ICONS | Up/Down:select  Enter:open  Esc:back" ;;
         *)
             a="$TOPA"
-            m=" ClaudeDOS Desktop | Esc:window mode  ^N:start  ^X:close  | mouse works too" ;;
+            m=" ClaudeDOS 1.2 | Esc:window mode  ^N:start  ^X:close  | mouse works too" ;;
     esac
     printf '\033[1;1H%s%-*.*s%s' "$a" $COLS $COLS "$m" "$RST"
 }
 
-ICON_LABELS="My Apps${NL}My Computer${NL}My Files"
+ICON_LABELS="My Apps${NL}My Computer${NL}My Files${NL}Games${NL}About"
 draw_icons() {
     local i=0 l r a
     while IFS= read -r l; do
@@ -619,18 +620,18 @@ build_about() {
     L7='|__|_______________|__|'
     L8='   |_______________|   '
     L9='    \_____________/    '
-    TXT="${NL} ${L1}  root@${HN}${NL} ${L2}  ----------------${NL} ${L3}  OS:      ClaudeDOS Desktop${NL} ${L4}  Kernel:  $(uname -r)${NL} ${L5}  Uptime:  $((UP/3600))h $(((UP%3600)/60))m${NL} ${L6}  Shell:   busybox ash${NL} ${L7}  Init:    custom /init${NL} ${L8}  CPU:     ${CPU}${NL} ${L9}  Memory:  $(((MT-MA)/1024))/$((MT/1024)) MiB (${CORES} cpu)"
+    TXT="${NL} ${L1}  root@${HN}${NL} ${L2}  ----------------${NL} ${L3}  OS:      ClaudeDOS 1.2${NL} ${L4}  Kernel:  $(uname -r)${NL} ${L5}  Uptime:  $((UP/3600))h $(((UP%3600)/60))m${NL} ${L6}  Shell:   busybox ash${NL} ${L7}  Init:    custom /init${NL} ${L8}  CPU:     ${CPU}${NL} ${L9}  Memory:  $(((MT-MA)/1024))/$((MT/1024)) MiB (${CORES} cpu)${NL}${NL} ClaudeDOS 1.2  (experimental / beta)${NL} Made by Claude Sonnet 5 and Claude Sonnet 5.5.${NL}${NL} An experiment to show what modern AI can build,${NL} and a novelty OS for breathing new life into${NL} old laptops. Not a daily driver: no networking,${NL} nothing is saved after you shut down."
 }
 
 build_help() {
-    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} KEYBOARD${NL} Ctrl+N  Start menu     Ctrl+X  close window${NL} Ctrl+S  save (Notepad)${NL} ESC / Ctrl+W  window mode (red bar):${NL}   arrows move, + / - resize, Tab next window,${NL}   M maximize, X close, N Start, D desktop icons${NL}${NL} MOUSE${NL} Click: focus.  Drag title bar: move.${NL} [=] maximize   [x] close   dbl-click title: max${NL} Drag right/bottom edge or corner: resize${NL} Right-click: context menu${NL} Double-click: open icons and files${NL} Wheel: scroll  (^ # v bar on the right edge)${NL}${NL} DESKTOP${NL} My Apps lists every app. My Computer shows${NL} hardware and drives. Settings changes the${NL} theme and timezone (reset on reboot).${NL}${NL} Calculator: + - * x / div mod ( )  e.g. 10div3${NL}${NL} GAMES (Start menu: P = Pong, T = Tic-Tac-Toe)${NL} Pong: mouse or W/S or Up/Down move, P pauses.${NL} Tic-Tac-Toe: click a square, or Enter / 1-9."
+    TXT=" Welcome to ClaudeDOS Desktop!${NL}${NL} KEYBOARD${NL} Ctrl+N  Start menu     Ctrl+X  close window${NL} Ctrl+S  save (Notepad)${NL} ESC / Ctrl+W  window mode (red bar):${NL}   arrows move, + / - resize, Tab next window,${NL}   M maximize, X close, N Start, D desktop icons${NL}${NL} MOUSE${NL} Click: focus.  Drag title bar: move.${NL} [=] maximize   [x] close   dbl-click title: max${NL} Drag right/bottom edge or corner: resize${NL} Right-click: context menu${NL} Double-click: open icons and files${NL} Wheel: scroll  (^ # v bar on the right edge)${NL}${NL} DESKTOP${NL} My Apps lists every app. My Computer shows${NL} hardware and drives. Settings changes the${NL} theme and timezone (reset on reboot).${NL}${NL} Calculator: + - * x / div mod ( )  e.g. 10div3${NL}${NL} GAMES (desktop or Start menu: Games)${NL} Pong: mouse or W/S or Up/Down move, P pauses.${NL} Tic-Tac-Toe: click a square, or Enter / 1-9."
 }
 
 # ---------------------------------------------------------------
 #  START MENU
 # ---------------------------------------------------------------
-LAUNCH_ITEMS="1  Notepad${NL}2  Files${NL}3  Terminal${NL}4  Calculator${NL}5  My Apps${NL}6  My Computer${NL}7  Settings${NL}8  Full-screen Shell${NL}9  Shut Down${NL}0  Reboot${NL}P  Pong${NL}T  Tic-Tac-Toe"
-LAUNCH_NAMES="notepad files term calc apps mycomp settings fsshell shutdown reboot pong ttt"
+LAUNCH_ITEMS="1  My Apps${NL}2  My Computer${NL}3  My Files${NL}4  Games${NL}5  About${NL}6  Notepad${NL}7  Terminal${NL}8  Calculator${NL}9  Settings${NL}0  Full-screen Shell${NL}S  Shut Down${NL}R  Reboot"
+LAUNCH_NAMES="apps mycomp files games about notepad term calc settings fsshell shutdown reboot"
 
 open_launcher() {
     local i T
@@ -658,8 +659,8 @@ k_launch() {
         DOWN) [ $sel -lt 11 ] && sel=$((sel+1)) ;;
         "$K_ENTER") close_win $id; nth_word $sel $LAUNCH_NAMES; launch $NW; ACT=full; return ;;
         [0-9]) close_win $id; nth_word $(( (KEY+9) % 10 )) $LAUNCH_NAMES; launch $NW; ACT=full; return ;;
-        p|P) close_win $id; launch pong; ACT=full; return ;;
-        t|T) close_win $id; launch ttt; ACT=full; return ;;
+        s|S) close_win $id; launch shutdown; ACT=full; return ;;
+        r|R) close_win $id; launch reboot; ACT=full; return ;;
     esac
     s $id sel $sel
 }
@@ -667,12 +668,12 @@ k_launch() {
 # ---------------------------------------------------------------
 #  MY APPS
 # ---------------------------------------------------------------
-APPS_LIST="Notepad${NL}Files${NL}Terminal${NL}Calculator${NL}System Info${NL}About ClaudeDOS${NL}Help${NL}Settings${NL}My Computer${NL}Full-screen Shell${NL}Pong${NL}Tic-Tac-Toe"
-APPS_NAMES="notepad files term calc sys about help settings mycomp fsshell pong ttt"
+APPS_LIST="Notepad${NL}Files${NL}Terminal${NL}Calculator${NL}System Info${NL}About ClaudeDOS${NL}Help${NL}Settings${NL}My Computer${NL}Full-screen Shell${NL}Games"
+APPS_NAMES="notepad files term calc sys about help settings mycomp fsshell games"
 
 open_apps() {
     newwin apps "My Apps" 40 16 || return
-    s $NEWID sel 0; s $NEWID top 0; s $NEWID count 12
+    s $NEWID sel 0; s $NEWID top 0; s $NEWID count 11
 }
 
 c_apps() {
@@ -698,7 +699,7 @@ k_apps() {
     g $id sel SEL
     case "$KEY" in
         UP)   [ $SEL -gt 0 ] && SEL=$((SEL-1)) ;;
-        DOWN) [ $SEL -lt 11 ] && SEL=$((SEL+1)) ;;
+        DOWN) [ $SEL -lt 10 ] && SEL=$((SEL+1)) ;;
         "$K_ENTER") apps_open $id; return ;;
     esac
     s $id sel $SEL
@@ -814,11 +815,12 @@ launch() {
         term)     newwin term "Terminal" 62 16 && { s $NEWID dir /root; s $NEWID out "ClaudeDOS terminal. One command at a time.${NL}Try: ls, cat, ps, free, df, dmesg${NL}"; s $NEWID in ""; } ;;
         calc)     newwin calc "Calculator" 40 14 && { s $NEWID hist " Try: 12*(3+4)   10div3   7mod3${NL} Operators: + - * x / div mod ( )${NL} (whole numbers only)${NL}"; s $NEWID in ""; } ;;
         sys)      open_info build_sys "System Info" 58 16 ;;
-        about)    open_info build_about "About ClaudeDOS" 62 15 ;;
+        about)    open_info build_about "About ClaudeDOS" 62 22 ;;
         help)     open_info build_help "Help" 56 22 ;;
         mycomp)   open_info build_mycomp "My Computer" 62 18 ;;
         apps)     open_apps ;;
         settings) open_settings ;;
+        games)    open_games ;;
         pong)     open_pong ;;
         ttt)      open_ttt ;;
         fsshell)  fs_shell ;;
@@ -898,13 +900,15 @@ open_icon() {  # index
         0) launch apps ;;
         1) launch mycomp ;;
         2) launch files ;;
+        3) launch games ;;
+        4) launch about ;;
     esac
 }
 
 icons_key() {
     case "$KEY" in
         UP)    [ $ICON_SEL -gt 0 ] && ICON_SEL=$((ICON_SEL-1)); ACT=full ;;
-        DOWN)  [ $ICON_SEL -lt 2 ] && ICON_SEL=$((ICON_SEL+1)); ACT=full ;;
+        DOWN)  [ $ICON_SEL -lt 4 ] && ICON_SEL=$((ICON_SEL+1)); ACT=full ;;
         "$K_ENTER") open_icon $ICON_SEL; MODE=app; ICON_SEL=-1; ACT=full ;;
         ESC|d|D) MODE=app; ICON_SEL=-1; ACT=full ;;
     esac
@@ -923,6 +927,7 @@ app_key() {
         apps)     k_apps $FOCUS ;;
         settings) k_settings $FOCUS ;;
         ctx)      k_ctx $FOCUS ;;
+        games)    k_games $FOCUS ;;
         pong)     k_pong $FOCUS ;;
         ttt)      k_ttt $FOCUS ;;
     esac
@@ -933,6 +938,50 @@ tick() {
     local n
     n=$(date +%H:%M)
     if [ "$n" != "$NOW" ]; then NOW=$n; paint draw_clock; fi
+}
+
+# ---------------------------------------------------------------
+#  GAMES FOLDER
+# ---------------------------------------------------------------
+GAMES_LIST="Pong${NL}Tic-Tac-Toe"
+GAMES_NAMES="pong ttt"
+
+open_games() {
+    local i T
+    for i in $ORDER; do
+        g $i type T
+        if [ "$T" = games ]; then raise_win $i; return; fi
+    done
+    newwin games "Games" 36 10 || return
+    s $NEWID sel 0; s $NEWID top 0; s $NEWID count 2
+}
+
+c_games() {
+    local SEL TOP
+    g $1 sel SEL; g $1 top TOP
+    crow 0 " Double-click or Enter to play" "$STAT"
+    emit_list "$GAMES_LIST" $SEL $TOP $((CH-2)) 1
+    s $1 top $LTOP
+    crow $((CH-1)) " Up/Down  Enter:Play  ^X:Close" "$STAT"
+}
+
+games_open() {  # id
+    local SEL
+    g $1 sel SEL
+    nth_word $SEL $GAMES_NAMES
+    launch $NW
+    ACT=full
+}
+
+k_games() {
+    local id=$1 SEL
+    g $id sel SEL
+    case "$KEY" in
+        UP)   [ $SEL -gt 0 ] && SEL=$((SEL-1)) ;;
+        DOWN) [ $SEL -lt 1 ] && SEL=$((SEL+1)) ;;
+        "$K_ENTER") games_open $id; return ;;
+    esac
+    s $id sel $SEL
 }
 
 # ---------------------------------------------------------------
@@ -1372,7 +1421,7 @@ icon_at() {  # col row -> ICONHIT = icon index, or empty
     ICONHIT=""
     if [ $2 -ge 3 ] && [ $(( ($2-3) % 2 )) -eq 0 ] && [ $1 -ge 3 ] && [ $1 -le 15 ]; then
         idx=$(( ($2-3)/2 ))
-        [ $idx -lt 3 ] && ICONHIT=$idx
+        [ $idx -lt 5 ] && ICONHIT=$idx
     fi
 }
 
@@ -1458,7 +1507,7 @@ mouse_down() {  # col row
         case "$T" in
             launch)   m_launch $i $c $r ;;
             ctx)      m_ctx $i $c $r ;;
-            files|apps) m_list_select $i $c $r ;;
+            files|apps|games) m_list_select $i $c $r ;;
             settings) m_settings $i $c $r ;;
             pong)     m_pong $i $c $r ;;
             ttt)      m_ttt $i $c $r ;;
@@ -1513,6 +1562,8 @@ mouse_dbl() {  # col row  (sent right after the matching press)
                if [ -n "$LISTHIT" ]; then KEY="$K_ENTER"; k_files $i; ACT=full; fi ;;
         apps)  m_list_select $i $c $r
                if [ -n "$LISTHIT" ]; then apps_open $i; fi ;;
+        games) m_list_select $i $c $r
+               if [ -n "$LISTHIT" ]; then games_open $i; fi ;;
     esac
 }
 

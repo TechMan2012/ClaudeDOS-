@@ -1,4 +1,4 @@
-# ClaudeDOS
+# ClaudeDOS 1.2
 
 > **Experimental / beta.** ClaudeDOS is an experimental project, built mainly to
 > demonstrate what modern AI can do, and also as a novelty OS for breathing a
@@ -32,9 +32,9 @@ moved, resized, maximized and closed with the keyboard **or the mouse**.
 ## Apps
 
 Desktop icons (My Apps, My Computer, My Files), Settings (themes, timezone; reset on reboot), Notepad, Files (click or arrow through directories, open files in Notepad),
-Games (Pong, Tic-Tac-Toe), Terminal (one command at a time), Calculator (`+ - x * / div mod`), System Info, About (neofetch
+Games folder (Pong, Tic-Tac-Toe), About, Terminal (one command at a time), Calculator (`+ - x * / div mod`), System Info, About (neofetch
 style, live data from `/proc`), Help, and a full-screen real shell for
-anything interactive. Start menu = `Ctrl+N` or click **Start**.
+anything interactive. Start menu = `Ctrl+N` or click **Start**; it lists the same items as the desktop icons.
 
 ## Controls
 
